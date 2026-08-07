@@ -1,0 +1,81 @@
+plugins {
+    id 'java'
+    id 'application'
+    id 'org.beryx.jlink' version '4.1.1'
+    id 'me.champeau.jmh' version '0.7.3'
+}
+
+group = 'edu.cornell.raven.core.audio.x3'
+version = '1.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+application {
+    mainClass = 'edu.cornell.raven.core.audio.x3.sud.X3Decoder'
+}
+
+dependencies {
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+    // JMH core/annotation APIs are provided by the me.champeau.jmh plugin;
+    // pin explicitly so IDE/source sets resolve cleanly.
+    jmh 'org.openjdk.jmh:jmh-core:1.37'
+    jmh 'org.openjdk.jmh:jmh-generator-annprocess:1.37'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+jmh {
+    jmhVersion = '1.37'
+    warmupIterations = 1
+    iterations = 1
+    fork = 1
+    benchmarkMode = ['thrpt', 'avgt']
+    timeUnit = 's'
+    failOnError = true
+    duplicateClassesStrategy = DuplicatesStrategy.EXCLUDE
+    // Keep defaults low so `./gradlew jmh` is usable as a smoke run; override via -Pjmh.includes etc.
+    includes = project.findProperty('jmh.includes') != null
+            ? [project.property('jmh.includes') as String]
+            : []
+    profilers = []
+    humanOutputFile = project.file("${project.layout.buildDirectory.get().asFile}/reports/jmh/human.txt")
+    resultsFile = project.file("${project.layout.buildDirectory.get().asFile}/reports/jmh/results.json")
+    resultFormat = 'JSON'
+}
+
+// Convenience task alias documented for local runs:
+//   ./gradlew jmh
+//   ./gradlew jmhJar
+// Filter benchmarks:
+//   ./gradlew jmh -Pjmh.includes=.*BitstreamReader.*
+tasks.named('jmh') {
+    group = 'benchmark'
+    description = 'Runs JMH microbenchmarks for the X3 decoder (src/jmh/java).'
+}
+
+tasks.register('benchmark') {
+    group = 'benchmark'
+    description = 'Alias for the jmh task.'
+    dependsOn 'jmh'
+}
+
+jlink {
+    imageZip = project.file("${project.layout.buildDirectory.get().asFile}/distributions/x3-decoder-image.zip")
+    options = ['--strip-debug', '--compress', 'zip-6', '--no-header-files', '--no-man-pages']
+    launcher {
+        name = 'x3decoder'
+    }
+}

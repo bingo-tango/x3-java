@@ -1,4 +1,4 @@
-package org.bioacoustics.x3;
+package edu.cornell.raven.core.audio.x3.sud;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -56,14 +56,24 @@ public class X3Decoder implements AutoCloseable {
         this.indexTable = new long[4000]; // Multiples of 4 elements per indexed block
         this.totalChunks = 0;
 
-        while (currentByteOffset < fileSize) {
+        final int headerBytes = 13;
+        while (currentByteOffset + headerBytes <= fileSize) {
             // Read chunk headers using zero-heap off-heap ValueLayouts
             byte chunkType = mappedFile.get(ValueLayout.JAVA_BYTE, currentByteOffset);
             int payloadLength = mappedFile.get(ValueLayout.JAVA_INT_UNALIGNED, currentByteOffset + 1);
             long timestamp = mappedFile.get(ValueLayout.JAVA_LONG_UNALIGNED, currentByteOffset + 5);
 
+            if (payloadLength < 0 || currentByteOffset + headerBytes + (long) payloadLength > fileSize) {
+                break;
+            }
+
             if (chunkType == 0x41) { // Example identifier for Acoustic Audio Chunk
                 int idx = totalChunks * 4;
+                if (idx + 3 >= indexTable.length) {
+                    long[] grown = new long[indexTable.length * 2];
+                    System.arraycopy(indexTable, 0, grown, 0, indexTable.length);
+                    indexTable = grown;
+                }
                 indexTable[idx]     = 0; // Cumulative sample count calculation goes here
                 indexTable[idx + 1] = currentByteOffset;
                 indexTable[idx + 2] = payloadLength;
@@ -72,7 +82,7 @@ public class X3Decoder implements AutoCloseable {
             }
             
             // Fast skip to the next chunk without loading data payloads onto heap
-            currentByteOffset += 13 + payloadLength; // 13-byte header overhead
+            currentByteOffset += headerBytes + (long) payloadLength;
         }
     }
 
@@ -116,5 +126,9 @@ public class X3Decoder implements AutoCloseable {
     public void close() {
         // Closes the Arena and immediately safely unmaps file structures from host system resources
         arena.close();
+    }
+
+    public static void main(String[] args) {
+        System.out.println("X3 Audio Decoder Engine (JDK 25 FFM API)");
     }
 }

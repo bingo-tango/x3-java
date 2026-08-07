@@ -1,12 +1,25 @@
 # High-Performance X3 (.SUD) Audio Decoder Development Plan
 
 ## 1. Executive Summary
-The target is a high-performance, native **X3 Audio Decoder** written in modern **Java (JDK 25+)**. The engine must decompress Ocean Instruments' SoundTrap `.SUD` (SoundTrap Underwater Data) files and stream standard linear PCM samples directly to a native `libsndfile` FLAC pipeline via the Foreign Function & Memory (FFM) API. 
+
+This repository is a **library module** for high-performance **X3 audio decode** and SoundTrap **`.SUD` ingestion**, written in modern **Java (JDK 25+)**.
+
+**In scope here**
+* Zero-copy mapping and parsing of Ocean Instruments SoundTrap `.SUD` containers
+* In-memory chunk indexing for sequential, bounded, and random-access reads
+* JIT-friendly X3 bitstream unpacking into caller-owned interleaved PCM buffers
+* Virtual-thread chunk pipeline for parallel decode
+
+**Out of scope here**
+* Native `libsndfile` / FLAC / WAV encode and export (owned by **upstream Raven**)
+* Any FFM bindings or writer stubs for native audio I/O in this repo
+
+Upstream consumes **PCM sample windows + metadata** this library exposes; it does not live behind an in-repo encoder.
 
 ### Key Performance Goals
 * **Zero GC Overhead:** Eliminate heap allocation during the core decoding loop.
 * **Maximized Parallelism:** Leverage hardware concurrency to out-pace single-threaded file processing.
-* **JIT-Driven Acceleration:** Optimize data structures to allow the JVM HotSpot compiler to auto-vectorize heavy mathematical loops natively.
+* **JIT-Driven Acceleration:** Optimize data structures so HotSpot can auto-vectorize heavy mathematical loops.
 * **Low Memory Footprint:** Map multi-gigabyte data files virtually without exhausting host RAM.
 
 ### Target Read Profiles
@@ -15,25 +28,49 @@ The target is a high-performance, native **X3 Audio Decoder** written in modern 
 * **Random Access (Seeking):** Instantly seek to specific sample indexes or timestamps without generating disk-heavy `.sudx` index files.
 
 ### Build tooling
-* The project will use Gradle 9.3.1 (with wrapper) for build and dependencies. 
-* It should use gradle plugins for jlink so we can build executables.
+* Gradle 9.3.1 (with wrapper) for build and dependencies.
+* Gradle plugins for jlink so custom runtime images can be produced when needed.
+* JMH under `src/jmh/java` for decoder microbenchmarks.
+
+### Agent coding rules
+Performance and allocation rules for implementers live in **[`AGENTS.md`](AGENTS.md)**. Follow those four hard rules on every decode/parse/math change.
 
 ---
 
-## 2. Technical Stack & JDK 25 Features
+## 2. Java package & module layout
+
+| Area | Package | Types (representative) |
+| :--- | :--- | :--- |
+| Codec / pipeline | `edu.cornell.raven.core.audio.x3` | `BitstreamReader`, `X3AudioDecoder`, `ChunkPipeline` |
+| SUD container | `edu.cornell.raven.core.audio.x3.sud` | `SudFileMapper`, `ChunkType`, `ChunkIndex`, `FileMetadata`, `TelemetryCallback`, facade `X3Decoder` |
+
+**JPMS module:** `edu.cornell.raven.core.audio.x3`  
+**Exports:** `edu.cornell.raven.core.audio.x3`, `edu.cornell.raven.core.audio.x3.sud`
+
+Dependency direction is one-way: **`.sud` → core `x3`**. Codec types must not depend on container types so upstream can use pure decode APIs without implying SUD-only use.
+
+```text
+edu.cornell.raven.core.audio.x3          (codec + pipeline)
+edu.cornell.raven.core.audio.x3.sud      (container + facade)
+```
+
+---
+
+## 3. Technical Stack & JDK 25 Features
 
 | Feature | Architecture Role | Performance Benefit |
 | :--- | :--- | :--- |
 | **FFM API (`MemorySegment`)** | Maps raw file blocks off-heap using `Arena.ofConfined()`. | **Zero Data Copying**: Eliminates heap allocation for large buffer structures. |
-| **Virtual Threads (Loom)** | Schedules chunk decompression concurrently via `StructuredTaskScope`. | Maximize multi-core execution with zero thread scheduling overhead. |
-| **JIT Auto-Vectorization** | Structuring loops cleanly to trigger native SIMD compilation (AVX2/Neon). | Cross-platform, hardware-safe mathematical parallelization without unstable experimental APIs. |
+| **Virtual Threads (Loom)** | Schedules chunk decompression concurrently via `StructuredTaskScope`. | Maximize multi-core execution with low thread scheduling overhead. |
+| **JIT Auto-Vectorization** | Structuring loops cleanly to trigger native SIMD compilation (AVX2/Neon). | Cross-platform mathematical parallelization without unstable experimental APIs. |
 
 ---
 
-## 3. Data Layout & Chunk Strategy
+## 4. Data Layout & Chunk Strategy
+
 A `.SUD` file is a sequential container of framed binary chunks. The decoder must parse individual block headers to route data blocks properly:
 
-
+```text
 +------------------------------------------------------------+
 |                       FILE HEADER                          |
 |  - System Calibration, Sample Rate, Bit Depth, Channels    |
@@ -47,6 +84,7 @@ A `.SUD` file is a sequential container of framed binary chunks. The decoder mus
 |  | METADATA PAYLOAD: Device Sensor Logs / Raw XML Config|  |
 |  +------------------------------------------------------+  |
 +------------------------------------------------------------+
+```
 
 ### Routing Rules
 * **Acoustic Audio Chunks:** Decode the bitstream to retrieve raw PCM values.
@@ -55,60 +93,99 @@ A `.SUD` file is a sequential container of framed binary chunks. The decoder mus
 
 ---
 
-## 4. Phase-by-Phase Implementation Blueprint
+## 5. Phase-by-Phase Implementation Blueprint
 
 ### Phase 1: Zero-Copy File Mapping & Metadata Ingestion
 * **Objective:** Parse file syntax without copying data buffers onto the JVM heap.
-* **Implementation:** 
+* **Package:** `...audio.x3.sud` (`SudFileMapper`, `FileMetadata`).
+* **Implementation:**
   * Open the `.SUD` file using standard channel APIs and map it into an off-heap `MemorySegment`.
   * Define structured `VarHandle` layouts to fetch global file configurations (sample rate, channel counts).
   * Extract device tracking tags and the initial configuration block.
 
 ### Phase 2: In-Memory Index Table Generator (Fast Seeking)
 * **Objective:** Allow rapid random access without building `.sudx` sidecar files on disk.
-* **Implementation:** 
-  * Build a single-pass, ultra-fast initialization thread that skips across chunk payloads using chunk size headers.
+* **Package:** `...audio.x3.sud` (`ChunkIndex`, `ChunkType`).
+* **Implementation:**
+  * Build a single-pass, ultra-fast initialization path that skips across chunk payloads using chunk size headers.
   * Cache layout data in a flattened primitive array: `long[] indexTable`.
   * For every audio chunk, index exactly 4 elements: `[Sample_Offset, File_Byte_Offset, Chunk_Length, Frame_Timestamp]`.
-  * **Seeking Mechanism:** Use binary searches on the `indexTable` to find target sample offsets instantly.
+  * **Seeking Mechanism:** Binary search on the `indexTable` to find target sample offsets instantly.
 
 ### Phase 3: JIT-Friendly Audio & Bitstream Unpacking
 * **Objective:** Structure predictive coding loops to guarantee HotSpot auto-vectorization across dual primitive types.
-* **Implementation:** 
+* **Package:** `...audio.x3` (`BitstreamReader`, `X3AudioDecoder`).
+* **Implementation:**
   * Track variable-bit streaming pointers inside primitive `int` registers using bitwise operators (`<<`, `>>`, `&`).
   * **Flatten all multi-channel audio tracks** into a single pre-allocated, flat 1D array (`int[]` or `short[]`) to maximize hardware cache locality.
-  * **Expose Dual Exporters:** 
-    1. Provide an integer export path that passes the raw decompressed 1D array reference directly to the FFM layer.
-    2. Provide a floating-point export path via a zero-allocation streaming loop. This method populates a caller-owned, pre-allocated `float[]` array, normalizing the 16-bit integer space down to a floating-point range between `[-1.0f, 1.0f]` by multiplying each sample by `(1.0f / 32768.0f)`.
-  * Ensure the mathematical normalization loop is completely free of branching statements (`if/else`), object allocations, or sub-method wrappers to guarantee JIT compiler auto-vectorization down to native CPU SIMD lanes.
+  * **Expose Dual Exporters:**
+    1. Integer export path that fills a caller-owned interleaved 1D buffer (for upstream native write or further processing).
+    2. Floating-point export path via a zero-allocation streaming loop into a caller-owned `float[]`, normalizing 16-bit integers to `[-1.0f, 1.0f]` by multiplying by `(1.0f / 32768.0f)`.
+  * Keep the normalization loop free of branching, object allocations, or sub-method wrappers so the JIT can map it to SIMD lanes.
 
 ### Phase 4: Threaded Parallel Processing Chunk Pipeline
 * **Objective:** Scale decoder processing throughput linearly across available CPU threads.
-* **Implementation:** 
-  * Divide the master file-mapped `MemorySegment` into minor, isolated block slices based on the index table.
-  * Distribute stateless audio decoding chunks across virtual worker threads using `StructuredTaskScope` to balance workloads simultaneously.
+* **Package:** `...audio.x3` (`ChunkPipeline`); facade orchestration in `...audio.x3.sud` (`X3Decoder`).
+* **Implementation:**
+  * Divide the master file-mapped `MemorySegment` into isolated block slices based on the index table.
+  * Distribute **stateless** audio decoding chunks across virtual worker threads using `StructuredTaskScope`.
   * Limit active virtual threads using a carrier-thread throttle to avoid over-saturating underlying native processing blocks.
 
-### Phase 5: Off-Heap FFM Streaming to `libsndfile`
-* **Objective:** Deliver decoded data to your native FLAC encoder without memory-copy delays.
-* **Implementation:** 
-  * Feed output memory segment addresses directly to native C-bindings using FFM calls like `sf_writef_int`.
-  * Sync workflows so that thread group `N+1` decodes in memory while thread group `N` is actively being committed to disk via `libsndfile`.
+### Phase 5: Upstream integration design (not implemented in this repo)
+
+* **Objective:** Define the **consumer contract** so upstream Raven can stream decoded PCM into `libsndfile` (or any other encoder) without this library owning native I/O.
+* **This library guarantees:**
+  * Zero-copy (or zero-copy where possible) map of `.SUD` input
+  * Index-backed seek for sequential / bounded / random read profiles
+  * Export of interleaved PCM into **caller-owned** buffers: `short[]` / `int[]` and/or `float[]` in `[-1, 1]`, optionally views as off-heap `MemorySegment`
+  * `FileMetadata` (sample rate, channels, bit depth, device tags) available alongside decoded windows
+* **Upstream owns:**
+  * `libsndfile` FFM downcalls, FLAC/WAV (and other) format selection
+  * Lifecycle of native handles, arenas used for encode-side native memory
+  * Pipelining encode of window *N* while this library decodes window *N+1* (if desired)
+* **Suggested handoff shape (conceptual only — no SPI types in this repo):**
+  * Interleaved frames in a caller-owned `short[]`/`float[]` or `MemorySegment`
+  * Frame count, channel count, sample rate from `FileMetadata` / decode return values
+  * Upstream calls e.g. `sf_writef_int` / `sf_writef_float` with those addresses
+
+Do **not** add `LibsndfileWriter` or equivalent types under `src/` in this repository.
 
 ---
 
-## 5. Explicit Prompting Guardrails for Coding Agents
+## 6. Coding agent guardrails (summary)
 
-When assigning coding tasks to LLMs or autonomous agents, paste these strict rules alongside the phase instructions:
+Full text and non-negotiables: **[`AGENTS.md`](AGENTS.md)**.
 
-> ### Rule 1: Absolute Heap-Allocation Ban
-> *"Do not allocate objects, arrays, or wrappers (such as `Integer`, `Byte`, or `ByteBuffer`) inside any decoding, parsing, or math loops. Use pre-allocated, flat primitive arrays passed as reference variables, or read directly from a pre-allocated off-heap `MemorySegment` using static `VarHandle` lookups."*
+1. **No heap allocation** in decode / parse / math hot loops.
+2. **1D flattened PCM only** (no `short[][]` / `int[][]`).
+3. **Stateless chunk work** suitable for virtual threads (no heavy locks on the hot path).
+4. **Pure countable loops** for HotSpot auto-vectorization.
 
-> ### Rule 2: Mandated Multi-Channel Flattening
-> *"Multi-dimensional structures like `int[][]` or `short[][]` are strictly prohibited. You must flatten all target dimensions into a standard 1D array (`int[]` or `short[]`). Track and traverse offsets using explicit inline multiplication arithmetic to preserve memory locality."*
+---
 
-> ### Rule 3: Native Thread Optimization Guardrails
-> *"Do not use synchronized blocks, heavy thread locks, or traditional heavy-thread allocations inside chunk execution paths. Ensure all processing logic inside chunks is completely stateless, relying exclusively on local variables and segment slices to leverage JDK 25 virtual worker threads."*
+## 7. Architecture (repo boundary)
 
-> ### Rule 4: Loop Purity for Auto-Vectorization
-> *"The core mathematical predictor loops must be strictly countable standard `for` loops. Do not include object instantiation, method invocations, try-catch blocks, or conditional branching (`if`/`else`) inside the innermost audio loops. All memory read and write targets must access contiguous segments of the 1D arrays to ensure the JIT compiler successfully maps instructions to native CPU SIMD registers."*
+```mermaid
+graph TB
+  subgraph thisRepo ["this repo: edu.cornell.raven.core.audio.x3"]
+    subgraph corePkg ["package ...audio.x3"]
+      BR[BitstreamReader]
+      AD[X3AudioDecoder]
+      CP[ChunkPipeline]
+    end
+    subgraph sudPkg ["package ...audio.x3.sud"]
+      MAP[SudFileMapper]
+      IDX[ChunkIndex]
+      META[FileMetadata]
+      FAC[X3Decoder facade]
+      TEL[TelemetryCallback]
+    end
+    FAC --> MAP
+    FAC --> IDX
+    FAC --> CP
+    CP --> AD
+    AD --> BR
+  end
+  UP["upstream Raven / libsndfile FFM"]
+  FAC -.->|"PCM int/float buffers + metadata only"| UP
+```
