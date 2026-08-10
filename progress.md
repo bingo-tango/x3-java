@@ -139,6 +139,23 @@
 - `X3Decoder` delegates int decode to the pipeline; ctor accepts `DecodeOptions`.
 - Tests: default budgets, parallel≡sequential on real fixture (48k frames).
 
+## Encoder + file conversion (unplanned, supports Phase 6): DONE
+
+- Pure-Java X3V2 encoder and `.wav` ↔ `.x3a` conversion (no libsndfile), aligned with
+  the public X3 archive format (x3-rust / x3new.m):
+  - `BitstreamWriter` — MSB-first packer with running CRC-16 and word-align.
+  - `Crc16` — same table/vectors as x3-rust frame/payload CRCs.
+  - `X3FrameHeader` — 20-byte big-endian `"x3"` header encode/decode.
+  - `X3AudioEncoder` — diff residuals, RICE0/1/3 + BFP/pass-through selection
+    (thresholds 3/8/20), multi-channel interleaved frames; payloads round-trip
+    through existing `X3AudioDecoder`.
+  - `WavPcm` — minimal 16-bit LE PCM RIFF reader/writer for conversion only.
+  - `X3Files.wav_to_x3a` / `x3a_to_wav` (plus camelCase aliases) write/read
+    `X3ARCHIV` + XML config frame + data frames.
+- Tests: CRC vectors, bit-packer vectors, encode↔decode lossless (quiet/BFP/stereo),
+  synthetic and fixture WAV round-trips (`LI192_15s.wav`).
+- Full `gradlew test`: BUILD SUCCESSFUL.
+
 ## Phases 5–6
 
-Not started. No changes to plan/scope.
+Not started (Phase 6 can call `X3Files` for `.x3a` paths).
