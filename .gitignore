@@ -45,3 +45,9 @@ out/
 .DS_Store
 Thumbs.db
 .junie/
+
+# Conversion benchmark outputs under ./test (keep source WAVs)
+/test/*.x3a
+/test/*.flac
+/test/*_from_x3a.wav
+/test/*_from_flac.wav
