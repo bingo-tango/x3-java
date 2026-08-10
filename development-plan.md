@@ -39,10 +39,10 @@ Performance and allocation rules for implementers live in **[`AGENTS.md`](AGENTS
 
 ## 2. Java package & module layout
 
-| Area | Package | Types (representative) |
-| :--- | :--- | :--- |
-| Codec / pipeline | `edu.cornell.raven.core.audio.x3` | `BitstreamReader`, `X3AudioDecoder`, `ChunkPipeline` |
-| SUD container | `edu.cornell.raven.core.audio.x3.sud` | `SudFileMapper`, `ChunkType`, `ChunkIndex`, `FileMetadata`, `TelemetryCallback`, facade `X3Decoder` |
+| Area | Package                                | Types (representative) |
+| :--- |:---------------------------------------| :--- |
+| Codec / pipeline | `edu.cornell.raven.core.audio.x3a`     | `BitstreamReader`, `X3AudioDecoder`, `ChunkPipeline` |
+| SUD container | `edu.cornell.raven.core.audio.x3a.sud` | `SudFileMapper`, `ChunkType`, `ChunkIndex`, `FileMetadata`, `TelemetryCallback`, facade `X3Decoder` |
 
 **JPMS module:** `edu.cornell.raven.core.audio.x3a` (the `a` suffix avoids javac's `-Xlint:module` terminal-digits warning; package names are unaffected)  
 **Exports:** `edu.cornell.raven.core.audio.x3`, `edu.cornell.raven.core.audio.x3.sud`
@@ -97,7 +97,7 @@ A `.SUD` file is a sequential container of framed binary chunks. The decoder mus
 
 ### Phase 1: Zero-Copy File Mapping & Metadata Ingestion
 * **Objective:** Parse file syntax without copying data buffers onto the JVM heap.
-* **Package:** `...audio.x3.sud` (`SudFileMapper`, `FileMetadata`).
+* **Package:** `...audio.x3a.sud` (`SudFileMapper`, `FileMetadata`).
 * **Implementation:**
   * Open the `.SUD` file using standard channel APIs and map it into an off-heap `MemorySegment`.
   * Define structured `VarHandle` layouts to fetch global file configurations (sample rate, channel counts).
@@ -105,7 +105,7 @@ A `.SUD` file is a sequential container of framed binary chunks. The decoder mus
 
 ### Phase 2: In-Memory Index Table Generator (Fast Seeking)
 * **Objective:** Allow rapid random access without building `.sudx` sidecar files on disk.
-* **Package:** `...audio.x3.sud` (`ChunkIndex`, `ChunkType`).
+* **Package:** `...audio.x3a.sud` (`ChunkIndex`, `ChunkType`).
 * **Implementation:**
   * Build a single-pass, ultra-fast initialization path that skips across chunk payloads using chunk size headers.
   * Cache layout data in a flattened primitive array: `long[] indexTable`.
@@ -125,7 +125,7 @@ A `.SUD` file is a sequential container of framed binary chunks. The decoder mus
 
 ### Phase 4: Threaded Parallel Processing Chunk Pipeline
 * **Objective:** Scale decoder processing throughput linearly across available CPU threads.
-* **Package:** `...audio.x3` (`ChunkPipeline`); facade orchestration in `...audio.x3.sud` (`X3Decoder`).
+* **Package:** `...audio.x3` (`ChunkPipeline`); facade orchestration in `...audio.x3a.sud` (`X3Decoder`).
 * **Implementation:**
   * Divide the master file-mapped `MemorySegment` into isolated block slices based on the index table.
   * Distribute **stateless** audio decoding chunks across virtual worker threads using `StructuredTaskScope`.
@@ -195,7 +195,7 @@ graph TB
       AD[X3AudioDecoder]
       CP[ChunkPipeline]
     end
-    subgraph sudPkg ["package ...audio.x3.sud"]
+    subgraph sudPkg ["package ...audio.x3a.sud"]
       MAP[SudFileMapper]
       IDX[ChunkIndex]
       META[FileMetadata]
