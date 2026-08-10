@@ -1,4 +1,4 @@
-package edu.cornell.raven.core.audio.x3.sud;
+package edu.cornell.raven.core.audio.x3a.sud;
 
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
@@ -33,7 +33,7 @@ public class X3DecoderBenchmark {
 
     @Setup(Level.Trial)
     public void setup() throws Exception {
-        sudFile = Files.createTempFile("x3-bench-", ".sud");
+        sudFile = Files.createTempFile("x3a-bench-", ".sud");
         Files.write(sudFile, new byte[4096]);
         decoder = new X3Decoder(sudFile);
         intDest = new short[2048];

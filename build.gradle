@@ -5,7 +5,7 @@ plugins {
     id 'me.champeau.jmh' version '0.7.3'
 }
 
-group = 'edu.cornell.raven.core.audio.x3'
+group = 'edu.cornell.raven.core.audio.x3a'
 version = '1.0-SNAPSHOT'
 
 repositories {
@@ -19,7 +19,7 @@ java {
 }
 
 application {
-    mainClass = 'edu.cornell.raven.core.audio.x3.sud.X3Decoder'
+    mainClass = 'edu.cornell.raven.core.audio.x3a.sud.X3Decoder'
 }
 
 dependencies {
@@ -73,7 +73,10 @@ tasks.register('benchmark') {
 }
 
 jlink {
-    imageZip = project.file("${project.layout.buildDirectory.get().asFile}/distributions/x3-decoder-image.zip")
+    // Derived from project.group by default, which would reintroduce the
+    // "module name component x3a should avoid terminal digits" warning.
+    mergedModuleName = 'edu.cornell.raven.core.audio.x3a.merged.module'
+    imageZip = project.file("${project.layout.buildDirectory.get().asFile}/distributions/x3a-decoder-image.zip")
     options = ['--strip-debug', '--compress', 'zip-6', '--no-header-files', '--no-man-pages']
     launcher {
         name = 'x3decoder'

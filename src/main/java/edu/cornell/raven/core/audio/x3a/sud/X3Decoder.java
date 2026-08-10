@@ -1,4 +1,4 @@
-package edu.cornell.raven.core.audio.x3.sud;
+package edu.cornell.raven.core.audio.x3a.sud;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -12,10 +12,8 @@ public class X3Decoder implements AutoCloseable {
     private final Arena arena;
     private final MemorySegment mappedFile;
     
-    // Config metadata extracted from Phase 1
-    private int sampleRate;
-    private int channels;
-    private int bitDepth; // SoundTrap standard is 16-bit
+    // Config metadata extracted from Phase 1 (sample rate, channels, bit depth, device tags)
+    private final FileMetadata metadata;
 
     // Phase 2: Flattened In-Memory Index Table
     // Layout per chunk: [0]=Sample_Offset, [1]=File_Byte_Offset, [2]=Chunk_Length, [3]=Frame_Timestamp
@@ -31,16 +29,23 @@ public class X3Decoder implements AutoCloseable {
             this.mappedFile = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size(), arena);
         }
 
-        parseFileHeaderAndMetadata();
+        this.metadata = parseFileHeaderAndMetadata();
         buildInMemoryIndexTable();
     }
 
-    private void parseFileHeaderAndMetadata() {
-        // AI AGENT TODO: Use VarHandles to extract exact SoundTrap global file formats
+    private FileMetadata parseFileHeaderAndMetadata() {
+        // AI AGENT TODO: Use VarHandles to extract exact SoundTrap global file formats.
+        // Converge this on SudFileMapper.parseHeader() so the real layouts land in one place.
         // For demonstration, mocking typical SoundTrap defaults:
-        this.sampleRate = 576000; 
-        this.channels = 1;
-        this.bitDepth = 16;
+        return new FileMetadata(576_000, 1, 16, "UNKNOWN", "");
+    }
+
+    /**
+     * Phase 1 file configuration, needed by any consumer building output headers
+     * (sample rate, channel count, bit depth, device tags).
+     */
+    public FileMetadata metadata() {
+        return metadata;
     }
 
     /**

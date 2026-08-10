@@ -1,4 +1,4 @@
-package edu.cornell.raven.core.audio.x3.sud;
+package edu.cornell.raven.core.audio.x3a.sud;
 
 /**
  * Identifiers for framed binary chunks inside a SoundTrap {@code .SUD} container.

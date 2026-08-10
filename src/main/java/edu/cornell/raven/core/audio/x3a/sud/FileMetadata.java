@@ -1,4 +1,4 @@
-package edu.cornell.raven.core.audio.x3.sud;
+package edu.cornell.raven.core.audio.x3a.sud;
 
 /**
  * Global configuration extracted from a {@code .SUD} file header (Phase 1).

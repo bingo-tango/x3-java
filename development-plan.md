@@ -44,14 +44,14 @@ Performance and allocation rules for implementers live in **[`AGENTS.md`](AGENTS
 | Codec / pipeline | `edu.cornell.raven.core.audio.x3` | `BitstreamReader`, `X3AudioDecoder`, `ChunkPipeline` |
 | SUD container | `edu.cornell.raven.core.audio.x3.sud` | `SudFileMapper`, `ChunkType`, `ChunkIndex`, `FileMetadata`, `TelemetryCallback`, facade `X3Decoder` |
 
-**JPMS module:** `edu.cornell.raven.core.audio.x3`  
+**JPMS module:** `edu.cornell.raven.core.audio.x3a` (the `a` suffix avoids javac's `-Xlint:module` terminal-digits warning; package names are unaffected)  
 **Exports:** `edu.cornell.raven.core.audio.x3`, `edu.cornell.raven.core.audio.x3.sud`
 
-Dependency direction is one-way: **`.sud` → core `x3`**. Codec types must not depend on container types so upstream can use pure decode APIs without implying SUD-only use.
+Dependency direction is one-way: **`.sud` → core `x3a`**. Codec types must not depend on container types so upstream can use pure decode APIs without implying SUD-only use.
 
 ```text
-edu.cornell.raven.core.audio.x3          (codec + pipeline)
-edu.cornell.raven.core.audio.x3.sud      (container + facade)
+edu.cornell.raven.core.audio.x3a          (codec + pipeline)
+edu.cornell.raven.core.audio.x3a.sud      (container + facade)
 ```
 
 ---
@@ -150,6 +150,28 @@ A `.SUD` file is a sequential container of framed binary chunks. The decoder mus
 
 Do **not** add `LibsndfileWriter` or equivalent types under `src/` in this repository.
 
+### Phase 6: Minimal JavaFX drag-and-drop verification app (test scaffolding, not library code)
+
+* **Objective:** The smallest possible GUI harness to prove the decoder works end-to-end on real files: drop in a `.SUD` or `.x3a`, get a `.wav` next to it.
+* **Relationship to the §1 scope boundary:** §1 and Phase 5 put WAV/FLAC encode out of scope **for the library**, and that stands — nothing here goes under `src/main/java`, nothing is exported from the JPMS module, and no `LibsndfileWriter`-style type is added. This app is a **developer test fixture** that lives in its own source set and consumes only the public PCM + metadata API, exactly as upstream Raven would. Its WAV writer is throwaway verification scaffolding, explicitly **not** the production encode path.
+* **Scope discipline:** A verification tool, not a product. No file chooser, no settings dialog, no playback, no batch queue, no preferences persistence, no progress bar. One window, one drop target, one status line.
+* **Interface:**
+  * Single `Stage` containing a `StackPane` drop zone with a label ("Drop a .SUD or .x3a file").
+  * `setOnDragOver` accepts the drag only when the dragboard holds exactly one file whose extension is `.sud` or `.x3a` (case-insensitive); otherwise the drop is rejected.
+  * `setOnDragDropped` starts the conversion and drives the status label through three states: `Converting <name>…`, `Wrote <name>.wav`, `Failed: <message>`.
+  * Conversion runs on a virtual thread; UI updates marshal back via `Platform.runLater`. The drop zone is disabled while a conversion is in flight so a second drop cannot race the first.
+* **Output naming:** Reuse the input path verbatim and swap the extension — `D:\dives\log_0342.sud` → `D:\dives\log_0342.wav`. No output directory prompt. Overwrite an existing target rather than accumulating `_1` / `_2` variants.
+* **Input routing:** Dispatch on extension — `.sud` goes through `SudFileMapper` / `ChunkIndex` (Phases 1–2) via the `X3Decoder` facade; `.x3a` carries the bare X3 bitstream, so it bypasses container chunk routing and feeds `X3AudioDecoder` / `BitstreamReader` directly. Both paths converge on the same interleaved PCM export call.
+* **Decode loop:** Drive `X3Decoder.decodeSamplesInt(long startSample, int length, short[] dest)` in fixed-size windows. Allocate the `short[]` window buffer **once per conversion**, outside the loop, and reuse it for every window — guardrail 1 in [`AGENTS.md`](AGENTS.md) applies here too.
+* **WAV writing:** A small manual RIFF/`WAVE` writer (44-byte canonical header, 16-bit signed little-endian PCM), sizes back-patched after the sample stream is written. Deliberately avoids `libsndfile`/FFM so the harness has **zero native dependencies** and can validate Phases 1–4 in isolation from any encoder.
+* **Metadata source:** WAV header fields come from `X3Decoder.metadata()`, which returns the Phase 1 `FileMetadata` (`sampleRate()`, `channels()`, `bitDepth()`) — the same accessor upstream Raven uses per Phase 5.
+* **Build integration (single-project build — no subprojects exist today):**
+  * Add a `tools` source set at `src/tools/java` with `main` output on its compile/runtime classpath. Keeps JavaFX out of `main`'s dependencies and out of `module-info.java`.
+  * Apply `org.openjfx.javafxplugin` with the `javafx.controls` module only (no FXML, media, web), scoped to the `tools` configurations.
+  * Register a `runTestApp` `JavaExec` task rather than repointing `application.mainClass` — the existing `application`/`jlink` setup keeps `X3Decoder` as the `x3decoder` launcher.
+  * Optional: a second `jlink` launcher for the GUI if a double-clickable build is ever needed for testers. Not required for local verification.
+* **Test assets:** `src/test/resources/` already holds `EH120_15s.wav`, `LI192_15s.wav`, `PI240_15s.wav` — useful as reference output for byte-comparing the harness's WAV against known-good decodes once real `.SUD` / `.x3a` inputs are on hand.
+
 ---
 
 ## 6. Coding agent guardrails (summary)
@@ -167,7 +189,7 @@ Full text and non-negotiables: **[`AGENTS.md`](AGENTS.md)**.
 
 ```mermaid
 graph TB
-  subgraph thisRepo ["this repo: edu.cornell.raven.core.audio.x3"]
+  subgraph thisRepo ["this repo: edu.cornell.raven.core.audio.x3a"]
     subgraph corePkg ["package ...audio.x3"]
       BR[BitstreamReader]
       AD[X3AudioDecoder]

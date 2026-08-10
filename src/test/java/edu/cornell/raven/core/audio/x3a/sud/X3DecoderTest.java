@@ -1,4 +1,4 @@
-package edu.cornell.raven.core.audio.x3.sud;
+package edu.cornell.raven.core.audio.x3a.sud;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -25,6 +25,20 @@ class X3DecoderTest {
 
             assertEquals(32, decoder.decodeSamplesInt(0L, 32, ints));
             assertEquals(32, decoder.decodeSamplesFloat(0L, 32, floats));
+        }
+    }
+
+    @Test
+    void metadata_exposesPhase1Config() throws Exception {
+        Path sud = tempDir.resolve("tiny.sud");
+        Files.write(sud, new byte[256]);
+
+        try (X3Decoder decoder = new X3Decoder(sud)) {
+            FileMetadata metadata = decoder.metadata();
+
+            assertEquals(576_000, metadata.sampleRate());
+            assertEquals(1, metadata.channels());
+            assertEquals(16, metadata.bitDepth());
         }
     }
 

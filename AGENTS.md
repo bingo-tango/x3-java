@@ -6,7 +6,7 @@ Architecture and phases: [`development-plan.md`](development-plan.md).
 ## Non-negotiables
 
 * **No `libsndfile` (or other native encode/export) implementation in this repo.** Upstream Raven owns FFM writers and FLAC/WAV paths. Document integration only; do not add writer types under `src/`.
-* **SUD container types live under `edu.cornell.raven.core.audio.x3.sud` only.** Codec/pipeline types stay in `edu.cornell.raven.core.audio.x3`. Dependency direction: `.sud` → core `x3`, never the reverse.
+* **SUD container types live under `edu.cornell.raven.core.audio.x3.sud` only.** Codec/pipeline types stay in `edu.cornell.raven.core.audio.x3`. Dependency direction: `.sud` → core `x3a`, never the reverse.
 
 ## Performance rules (hard)
 

@@ -1,4 +1,4 @@
-package edu.cornell.raven.core.audio.x3;
+package edu.cornell.raven.core.audio.x3a;
 
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
@@ -18,22 +18,30 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.util.concurrent.TimeUnit;
 
-@BenchmarkMode(Mode.Throughput)
-@OutputTimeUnit(TimeUnit.SECONDS)
+@BenchmarkMode(Mode.AverageTime)
+@OutputTimeUnit(TimeUnit.NANOSECONDS)
 @Warmup(iterations = 1, time = 1)
 @Measurement(iterations = 1, time = 1)
 @Fork(1)
 @State(Scope.Thread)
-public class BitstreamReaderBenchmark {
+public class X3AudioDecoderBenchmark {
 
     private Arena arena;
     private MemorySegment payload;
+    private X3AudioDecoder decoder;
+    private short[] intDest;
+    private float[] floatDest;
+    private short[] scratch;
 
     @Setup(Level.Trial)
     public void setup() {
         arena = Arena.ofConfined();
-        payload = arena.allocate(4096);
-        payload.fill((byte) 0xA5);
+        payload = arena.allocate(8192);
+        payload.fill((byte) 0x3C);
+        decoder = new X3AudioDecoder();
+        intDest = new short[4096];
+        floatDest = new float[4096];
+        scratch = new short[4096];
     }
 
     @TearDown(Level.Trial)
@@ -42,16 +50,12 @@ public class BitstreamReaderBenchmark {
     }
 
     @Benchmark
-    public void readNibbles(Blackhole blackhole) {
-        BitstreamReader reader = new BitstreamReader(payload);
-        int acc = 0;
-        while (reader.hasRemaining()) {
-            try {
-                acc += reader.readBits(4);
-            } catch (RuntimeException ex) {
-                break;
-            }
-        }
-        blackhole.consume(acc);
+    public void decodeChunkInt(Blackhole blackhole) {
+        blackhole.consume(decoder.decodeChunkInt(payload, 1, intDest, 0));
+    }
+
+    @Benchmark
+    public void decodeChunkFloat(Blackhole blackhole) {
+        blackhole.consume(decoder.decodeChunkFloat(payload, 1, floatDest, 0, scratch));
     }
 }

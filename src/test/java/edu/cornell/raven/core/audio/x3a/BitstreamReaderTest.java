@@ -1,4 +1,4 @@
-package edu.cornell.raven.core.audio.x3;
+package edu.cornell.raven.core.audio.x3a;
 
 import org.junit.jupiter.api.Test;
 
