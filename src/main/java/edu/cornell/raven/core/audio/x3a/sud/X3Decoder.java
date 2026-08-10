@@ -1,17 +1,16 @@
 package edu.cornell.raven.core.audio.x3a.sud;
 
-import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.nio.channels.FileChannel;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 
 public class X3Decoder implements AutoCloseable {
 
-    private final Arena arena;
+    // Phase 1: Zero-copy mapping + metadata ingestion (converged here per the facade's
+    // FAC --> MAP dependency in the architecture diagram, rather than duplicating it).
+    private final SudFileMapper mapper;
     private final MemorySegment mappedFile;
-    
+
     // Config metadata extracted from Phase 1 (sample rate, channels, bit depth, device tags)
     private final FileMetadata metadata;
 
@@ -21,23 +20,10 @@ public class X3Decoder implements AutoCloseable {
     private int totalChunks;
 
     public X3Decoder(Path sudFilePath) throws Exception {
-        // Use a Confined Arena because a single virtual thread typically initializes the file mapping
-        this.arena = Arena.ofConfined();
-        
-        try (FileChannel channel = FileChannel.open(sudFilePath, StandardOpenOption.READ)) {
-            // Phase 1: Zero-Copy Memory Mapping
-            this.mappedFile = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size(), arena);
-        }
-
-        this.metadata = parseFileHeaderAndMetadata();
+        this.mapper = new SudFileMapper(sudFilePath);
+        this.mappedFile = mapper.mappedFile();
+        this.metadata = mapper.parseHeader();
         buildInMemoryIndexTable();
-    }
-
-    private FileMetadata parseFileHeaderAndMetadata() {
-        // AI AGENT TODO: Use VarHandles to extract exact SoundTrap global file formats.
-        // Converge this on SudFileMapper.parseHeader() so the real layouts land in one place.
-        // For demonstration, mocking typical SoundTrap defaults:
-        return new FileMetadata(576_000, 1, 16, "UNKNOWN", "");
     }
 
     /**
@@ -129,8 +115,8 @@ public class X3Decoder implements AutoCloseable {
 
     @Override
     public void close() {
-        // Closes the Arena and immediately safely unmaps file structures from host system resources
-        arena.close();
+        // Closes the mapper's Arena and immediately safely unmaps file structures from host system resources
+        mapper.close();
     }
 
     public static void main(String[] args) {
