@@ -1,11 +1,13 @@
 package edu.cornell.raven.core.audio.x3a.sud;
 
+import edu.cornell.raven.core.audio.x3a.DecodeOptions;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -84,6 +86,37 @@ class X3DecoderTest {
     void parseBlockLen_readsCfg() {
         assertEquals(16, X3Decoder.parseBlockLen("<BLKLEN>16</BLKLEN>", 20));
         assertEquals(20, X3Decoder.parseBlockLen("", 20));
+    }
+
+    @Test
+    void realFixture_parallelMatchesSequential() throws Exception {
+        Path fixture = Path.of("src/test/resources/7867.230815161432.sud");
+        if (!Files.exists(fixture)) {
+            return;
+        }
+        int n = 48_000; // enough frames to span multiple chunks
+        short[] sequential;
+        short[] parallel;
+        try (X3Decoder seq = new X3Decoder(fixture, DecodeOptions.defaults().withMaxConcurrency(1))) {
+            sequential = new short[n];
+            assertEquals(n, seq.decodeSamplesInt(0L, n, sequential));
+            assertEquals(1, seq.pipeline().maxConcurrency());
+        }
+        try (X3Decoder par = new X3Decoder(fixture, DecodeOptions.defaults().withMaxConcurrency(4))) {
+            parallel = new short[n];
+            assertEquals(n, par.decodeSamplesInt(0L, n, parallel));
+            assertTrue(par.pipeline().usesSharedLimiter());
+            assertEquals(4, par.pipeline().maxConcurrency());
+        }
+        assertArrayEquals(sequential, parallel);
+        boolean anyNonZero = false;
+        for (short s : sequential) {
+            if (s != 0) {
+                anyNonZero = true;
+                break;
+            }
+        }
+        assertTrue(anyNonZero);
     }
 
     @Test

@@ -60,7 +60,8 @@ public final class SudFileMapper implements AutoCloseable {
     private final MemorySegment mappedFile;
 
     public SudFileMapper(Path sudFilePath) throws Exception {
-        this.arena = Arena.ofConfined();
+        // Shared arena: Phase 4 parallel decode reads the map from virtual worker threads.
+        this.arena = Arena.ofShared();
         try (FileChannel channel = FileChannel.open(sudFilePath, StandardOpenOption.READ)) {
             this.mappedFile = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size(), arena);
         }

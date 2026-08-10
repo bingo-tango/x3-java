@@ -27,7 +27,7 @@ import java.util.concurrent.TimeUnit;
 @State(Scope.Thread)
 public class ChunkPipelineBenchmark {
 
-    @Param({"1", "4"})
+    @Param({"1", "2", "4", "8"})
     public int concurrency;
 
     private Arena arena;

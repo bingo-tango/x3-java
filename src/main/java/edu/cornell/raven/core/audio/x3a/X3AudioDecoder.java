@@ -47,6 +47,13 @@ public final class X3AudioDecoder {
     }
 
     /**
+     * Stateless copy for parallel chunk tasks (each task needs its own block scratch).
+     */
+    public X3AudioDecoder newInstance() {
+        return new X3AudioDecoder(blockLen, riceOrders);
+    }
+
+    /**
      * Decodes one acoustic chunk / frame payload into a caller-owned interleaved {@code short[]} buffer.
      *
      * @param payload     compressed X3 payload (filter state + blocks)

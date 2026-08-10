@@ -1,5 +1,7 @@
 package edu.cornell.raven.core.audio.x3a.sud;
 
+import edu.cornell.raven.core.audio.x3a.ChunkPipeline;
+import edu.cornell.raven.core.audio.x3a.DecodeOptions;
 import edu.cornell.raven.core.audio.x3a.X3AudioDecoder;
 
 import java.lang.foreign.MemorySegment;
@@ -23,17 +25,28 @@ public class X3Decoder implements AutoCloseable {
     // Phase 2: Flattened in-memory index table (see ChunkIndex for column layout)
     private final ChunkIndex chunkIndex;
 
-    // Phase 3: X3 bitstream unpacker (stateless per call aside from reusable scratch)
+    // Phase 3–4: codec + virtual-thread chunk pipeline
     private final X3AudioDecoder audioDecoder;
+    private final ChunkPipeline pipeline;
+    private final DecodeOptions options;
     private final int channels;
-
-    /** Reusable per-chunk PCM scratch (grows to largest chunk seen). */
-    private short[] chunkScratch = new short[8192];
 
     /** Reusable int→float scratch for {@link #decodeSamplesFloat}. */
     private short[] floatScratch = new short[0];
 
     public X3Decoder(Path sudFilePath) throws Exception {
+        this(sudFilePath, DecodeOptions.sudDefaults((int) RecordHeader.BYTES));
+    }
+
+    public X3Decoder(Path sudFilePath, DecodeOptions options) throws Exception {
+        if (options == null) {
+            throw new IllegalArgumentException("options must not be null");
+        }
+        // SUD facade always applies container framing + pair-swap; caller may still tune concurrency.
+        DecodeOptions sudOpts = options
+                .withPayloadHeaderBytes((int) RecordHeader.BYTES)
+                .withSudPayload(true);
+        this.options = sudOpts;
         this.mapper = new SudFileMapper(sudFilePath);
         this.mappedFile = mapper.mappedFile();
         this.metadata = mapper.parseHeader();
@@ -42,6 +55,14 @@ public class X3Decoder implements AutoCloseable {
         this.channels = Math.max(1, metadata.channels());
         int blockLen = parseBlockLen(metadata.xmlConfig(), 16);
         this.audioDecoder = new X3AudioDecoder(blockLen, new int[] {0, 1, 3});
+        this.pipeline = new ChunkPipeline(
+                mappedFile,
+                chunkIndex.table(),
+                chunkIndex.chunkCount(),
+                chunkIndex.totalSamples(),
+                audioDecoder,
+                channels,
+                sudOpts);
     }
 
     /**
@@ -61,6 +82,20 @@ public class X3Decoder implements AutoCloseable {
     }
 
     /**
+     * Effective decode options (SUD framing applied).
+     */
+    public DecodeOptions options() {
+        return options;
+    }
+
+    /**
+     * Phase 4 pipeline (tests / diagnostics).
+     */
+    public ChunkPipeline pipeline() {
+        return pipeline;
+    }
+
+    /**
      * High-Performance Integer Read: Direct 1D array delivery for libsndfile/FLAC pipeline.
      * CRITICAL RULE: Destination array must be pre-allocated by the caller to preserve zero allocation.
      *
@@ -70,48 +105,7 @@ public class X3Decoder implements AutoCloseable {
      * @return number of frames written
      */
     public int decodeSamplesInt(long startSample, int length, short[] destIntBuffer) {
-        if (length <= 0) {
-            return 0;
-        }
-        long total = chunkIndex.totalSamples();
-        if (startSample < 0 || startSample >= total) {
-            return 0;
-        }
-        long end = startSample + length;
-        if (end > total) {
-            end = total;
-            length = (int) (end - startSample);
-        }
-
-        int framesWritten = 0;
-        int chunk = chunkIndex.findChunkBySample(startSample);
-        if (chunk < 0) {
-            return 0;
-        }
-
-        while (framesWritten < length && chunk < chunkIndex.chunkCount()) {
-            long chunkStart = chunkIndex.sampleOffset(chunk);
-            int chunkSamples = chunkSampleCount(chunk);
-            long payloadOff = chunkIndex.fileByteOffset(chunk) + RecordHeader.BYTES;
-            int payloadLen = (int) chunkIndex.chunkLength(chunk);
-
-            ensureChunkScratch(chunkSamples * channels);
-            MemorySegment payload = mappedFile.asSlice(payloadOff, payloadLen);
-            audioDecoder.decodeChunkInt(payload, chunkSamples, channels, chunkScratch, 0, true);
-
-            long copyFrom = Math.max(startSample, chunkStart);
-            long copyTo = Math.min(end, chunkStart + chunkSamples);
-            int localFrom = (int) (copyFrom - chunkStart);
-            int n = (int) (copyTo - copyFrom);
-            int destBase = framesWritten * channels;
-            int srcBase = localFrom * channels;
-            int nSamples = n * channels;
-            System.arraycopy(chunkScratch, srcBase, destIntBuffer, destBase, nSamples);
-
-            framesWritten += n;
-            chunk++;
-        }
-        return framesWritten;
+        return pipeline.decodeWindowInt(startSample, length, destIntBuffer);
     }
 
     /**
@@ -132,20 +126,6 @@ public class X3Decoder implements AutoCloseable {
             destFloatBuffer[i] = floatScratch[i] * SCALE_TO_UNIT;
         }
         return readFrames;
-    }
-
-    private int chunkSampleCount(int chunkIndexPos) {
-        long start = chunkIndex.sampleOffset(chunkIndexPos);
-        long end = (chunkIndexPos + 1 < chunkIndex.chunkCount())
-                ? chunkIndex.sampleOffset(chunkIndexPos + 1)
-                : chunkIndex.totalSamples();
-        return (int) (end - start);
-    }
-
-    private void ensureChunkScratch(int samples) {
-        if (chunkScratch.length < samples) {
-            chunkScratch = new short[samples];
-        }
     }
 
     static int parseBlockLen(String xml, int defaultLen) {

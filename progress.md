@@ -124,6 +124,21 @@
   block work is lock-free / scratch-local (virtual-thread ready for Phase 4);
   integrate loop is a tight countable `for`.
 
-## Phases 4–6
+## Phase 4 — Threaded Parallel Chunk Pipeline: DONE
+
+- `DecodeScheduler`: process-wide semaphore default `min(8, max(1, cores/2))`
+  (override `x3a.decode.sharedMaxConcurrency`).
+- `DecodeOptions`: per-decoder `min(4, cores / 2)` (`x3a.decode.maxConcurrency`),
+  shared limiter **on by default** (`x3a.decode.sharedLimiter=false` to disable),
+  SUD helpers for header bytes + pair-swap.
+- `ChunkPipeline`: index-backed window decode; sequential for 1 chunk or
+  `maxConcurrency==1`; else virtual-thread executor + local/shared permits
+  (stable API — STS still preview on JDK 25). Task-local `X3AudioDecoder` +
+  scratch; fixed dest offsets for OOO completion. `SudFileMapper` uses
+  `Arena.ofShared()` so mapped payloads are readable off the owner thread.
+- `X3Decoder` delegates int decode to the pipeline; ctor accepts `DecodeOptions`.
+- Tests: default budgets, parallel≡sequential on real fixture (48k frames).
+
+## Phases 5–6
 
 Not started. No changes to plan/scope.
