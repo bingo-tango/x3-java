@@ -32,21 +32,26 @@ public class ChunkIndexBenchmark {
     private MemorySegment mappedFile;
     private ChunkIndex index;
 
+    private static final ValueLayout.OfShort LE_SHORT =
+            ValueLayout.JAVA_SHORT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
+    private static final int SAMPLE_RATE = 48_000;
+
     @Setup(Level.Trial)
     public void setup() {
         arena = Arena.ofConfined();
-        // Synthetic stream: header + N acoustic chunks
+        // Synthetic stream: N audio chunks, each a real 20-byte record header + 32-byte payload
         int chunks = 256;
-        long size = 128L + chunks * (13L + 32L);
+        long size = chunks * (RecordHeader.BYTES + 32L);
         mappedFile = arena.allocate(size);
         mappedFile.fill((byte) 0);
 
-        long offset = 128L;
+        long offset = 0L;
         for (int i = 0; i < chunks; i++) {
-            mappedFile.set(ValueLayout.JAVA_BYTE, offset, ChunkType.ACOUSTIC_AUDIO.id());
-            mappedFile.set(ValueLayout.JAVA_INT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN), offset + 1, 32);
-            mappedFile.set(ValueLayout.JAVA_LONG_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN), offset + 5, i);
-            offset += 13L + 32L;
+            mappedFile.set(ValueLayout.JAVA_BYTE, offset, (byte) 0x52);
+            mappedFile.set(ValueLayout.JAVA_BYTE, offset + 1, (byte) 0xA9);
+            mappedFile.set(LE_SHORT, offset + 4, (short) 32); // payloadLength
+            mappedFile.set(LE_SHORT, offset + 6, (short) 16); // decoded sample count for this chunk
+            offset += RecordHeader.BYTES + 32L;
         }
         index = new ChunkIndex();
     }
@@ -58,7 +63,7 @@ public class ChunkIndexBenchmark {
 
     @Benchmark
     public void buildIndex(Blackhole blackhole) {
-        index.build(mappedFile);
+        index.build(mappedFile, SAMPLE_RATE);
         blackhole.consume(index.chunkCount());
     }
 }

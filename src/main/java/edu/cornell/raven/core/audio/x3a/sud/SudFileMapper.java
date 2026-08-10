@@ -1,11 +1,8 @@
 package edu.cornell.raven.core.audio.x3a.sud;
 
 import java.lang.foreign.Arena;
-import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.lang.invoke.VarHandle;
-import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -26,10 +23,12 @@ import java.util.regex.Pattern;
  * offset  0: short  sync            (always 0x52, 0xA9)
  * offset  2: short  reserved0       (always 0x00, 0x00 in the fixture)
  * offset  4: short  payloadLength   (little-endian, bytes following the header)
- * offset  6: short  recordType      (1 == metadata/event record; other values
- *                                    mark a binary acoustic-audio chunk, which
- *                                    Phase 2 indexes and this class skips over
- *                                    via payloadLength without decoding)
+ * offset  6: short  recordType      (1 == metadata/event record; any other value
+ *                                    marks a binary acoustic-audio chunk, and is
+ *                                    itself that chunk's decoded sample count —
+ *                                    see {@link ChunkIndex}, which indexes those
+ *                                    chunks. This class skips them via
+ *                                    payloadLength without decoding.)
  * offset  8: int    sessionId       (opaque; constant across a file's metadata run)
  * offset 12: short  sequence        (opaque; not needed for Phase 1)
  * offset 14: byte[6] recordTag      (opaque; not needed for Phase 1)
@@ -51,23 +50,7 @@ import java.util.regex.Pattern;
  */
 public final class SudFileMapper implements AutoCloseable {
 
-    private static final MemoryLayout RECORD_HEADER_LAYOUT = MemoryLayout.structLayout(
-            ValueLayout.JAVA_SHORT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN).withName("sync"),
-            ValueLayout.JAVA_SHORT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN).withName("reserved0"),
-            ValueLayout.JAVA_SHORT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN).withName("payloadLength"),
-            ValueLayout.JAVA_SHORT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN).withName("recordType"),
-            MemoryLayout.sequenceLayout(12, ValueLayout.JAVA_BYTE).withName("opaqueTail"));
-
-    private static final VarHandle PAYLOAD_LENGTH =
-            RECORD_HEADER_LAYOUT.varHandle(MemoryLayout.PathElement.groupElement("payloadLength"));
-    private static final VarHandle RECORD_TYPE =
-            RECORD_HEADER_LAYOUT.varHandle(MemoryLayout.PathElement.groupElement("recordType"));
-
-    private static final long RECORD_HEADER_BYTES = RECORD_HEADER_LAYOUT.byteSize();
-    private static final byte SYNC_BYTE_0 = 0x52;
-    private static final byte SYNC_BYTE_1 = (byte) 0xA9;
-    private static final int METADATA_RECORD_TYPE = 1;
-    private static final long SYNC_SEARCH_WINDOW = 65_536L;
+    static final long SYNC_SEARCH_WINDOW = 65_536L;
 
     private static final Pattern CFG_TAG = Pattern.compile("<CFG\\b");
 
@@ -101,7 +84,7 @@ public final class SudFileMapper implements AutoCloseable {
     public FileMetadata parseHeader() {
         long fileSize = mappedFile.byteSize();
         long searchLimit = Math.min(fileSize, SYNC_SEARCH_WINDOW);
-        long pos = findFirstSync(searchLimit);
+        long pos = RecordHeader.findFirstSync(mappedFile, searchLimit);
         if (pos < 0) {
             return DEFAULT_METADATA;
         }
@@ -115,21 +98,20 @@ public final class SudFileMapper implements AutoCloseable {
         int fallbackChannels = -1;
         int fallbackBitDepth = -1;
 
-        while (pos + RECORD_HEADER_BYTES <= fileSize) {
-            if (mappedFile.get(ValueLayout.JAVA_BYTE, pos) != SYNC_BYTE_0
-                    || mappedFile.get(ValueLayout.JAVA_BYTE, pos + 1) != SYNC_BYTE_1) {
+        while (pos + RecordHeader.BYTES <= fileSize) {
+            if (!RecordHeader.hasSyncAt(mappedFile, pos)) {
                 break;
             }
 
-            int payloadLength = Short.toUnsignedInt((short) PAYLOAD_LENGTH.get(mappedFile, pos));
-            int recordType = Short.toUnsignedInt((short) RECORD_TYPE.get(mappedFile, pos));
-            long payloadStart = pos + RECORD_HEADER_BYTES;
+            int payloadLength = RecordHeader.payloadLength(mappedFile, pos);
+            int recordType = RecordHeader.sampleCountOrRecordType(mappedFile, pos);
+            long payloadStart = pos + RecordHeader.BYTES;
 
             if (payloadStart + payloadLength > fileSize) {
                 break;
             }
 
-            if (recordType == METADATA_RECORD_TYPE) {
+            if (RecordHeader.isMetadata(recordType)) {
                 String text = decodeSwappedText(payloadStart, payloadLength);
                 xmlConfig.append(text);
 
@@ -169,16 +151,6 @@ public final class SudFileMapper implements AutoCloseable {
             return new FileMetadata(576_000, 1, 16, deviceId == null ? "UNKNOWN" : deviceId, fullXml);
         }
         return new FileMetadata(sampleRate, channels, bitDepth, deviceId == null ? "UNKNOWN" : deviceId, fullXml);
-    }
-
-    private long findFirstSync(long limit) {
-        for (long i = 0; i + 2 <= limit; i++) {
-            if (mappedFile.get(ValueLayout.JAVA_BYTE, i) == SYNC_BYTE_0
-                    && mappedFile.get(ValueLayout.JAVA_BYTE, i + 1) == SYNC_BYTE_1) {
-                return i;
-            }
-        }
-        return -1;
     }
 
     private String decodeSwappedText(long offset, int length) {

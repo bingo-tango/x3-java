@@ -1,7 +1,6 @@
 package edu.cornell.raven.core.audio.x3a.sud;
 
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 
 /**
  * Phase 2: Flattened in-memory index table for fast seeking without {@code .sudx} sidecars.
@@ -17,39 +16,54 @@ public final class ChunkIndex {
     public static final int CHUNK_LENGTH = 2;
     public static final int FRAME_TIMESTAMP = 3;
 
-    private static final int HEADER_BYTES = 13;
-    private static final long DEFAULT_HEADER_SKIP = 128L;
+    private static final long NANOS_PER_SECOND = 1_000_000_000L;
 
     private long[] table;
     private int chunkCount;
+    private long totalSamples;
 
     public ChunkIndex() {
         this.table = new long[0];
         this.chunkCount = 0;
+        this.totalSamples = 0L;
     }
 
     /**
-     * Single-pass scan that skips payloads using chunk size headers and indexes acoustic chunks only.
+     * Single-pass scan that walks every record via the shared {@link RecordHeader}
+     * framing, skipping metadata/event records (including the trailing
+     * end-of-session one) and indexing everything else as an audio chunk. Each
+     * chunk's own header field is its decoded sample count (see
+     * {@link RecordHeader#sampleCountOrRecordType}), so {@code Sample_Offset} and
+     * {@code Frame_Timestamp} are exact, not approximated from compressed byte
+     * length.
+     *
+     * @param mappedFile zero-copy mapped {@code .SUD} file
+     * @param sampleRate decoded audio sample rate (Hz), used to convert cumulative
+     *                   sample counts into {@code Frame_Timestamp} nanoseconds
      */
-    public void build(MemorySegment mappedFile) {
-        long currentByteOffset = DEFAULT_HEADER_SKIP;
+    public void build(MemorySegment mappedFile, int sampleRate) {
         long fileSize = mappedFile.byteSize();
-        long cumulativeSamples = 0L;
+        long searchLimit = Math.min(fileSize, SudFileMapper.SYNC_SEARCH_WINDOW);
+        long pos = RecordHeader.findFirstSync(mappedFile, searchLimit);
 
-        // Conservative initial capacity; grow as needed.
+        long cumulativeSamples = 0L;
         long[] working = new long[1024 * STRIDE];
         int count = 0;
 
-        while (currentByteOffset + HEADER_BYTES <= fileSize) {
-            byte chunkTypeId = mappedFile.get(ValueLayout.JAVA_BYTE, currentByteOffset);
-            int payloadLength = mappedFile.get(ValueLayout.JAVA_INT_UNALIGNED, currentByteOffset + 1);
-            long timestamp = mappedFile.get(ValueLayout.JAVA_LONG_UNALIGNED, currentByteOffset + 5);
-
-            if (payloadLength < 0 || currentByteOffset + HEADER_BYTES + payloadLength > fileSize) {
+        while (pos >= 0 && pos + RecordHeader.BYTES <= fileSize) {
+            if (!RecordHeader.hasSyncAt(mappedFile, pos)) {
                 break;
             }
 
-            if (ChunkType.fromId(chunkTypeId) == ChunkType.ACOUSTIC_AUDIO) {
+            int payloadLength = RecordHeader.payloadLength(mappedFile, pos);
+            int sampleCountOrRecordType = RecordHeader.sampleCountOrRecordType(mappedFile, pos);
+            long payloadStart = pos + RecordHeader.BYTES;
+
+            if (payloadStart + payloadLength > fileSize) {
+                break;
+            }
+
+            if (!RecordHeader.isMetadata(sampleCountOrRecordType)) {
                 if ((count + 1) * STRIDE > working.length) {
                     long[] grown = new long[working.length * 2];
                     System.arraycopy(working, 0, grown, 0, working.length);
@@ -57,18 +71,18 @@ public final class ChunkIndex {
                 }
                 int idx = count * STRIDE;
                 working[idx + SAMPLE_OFFSET] = cumulativeSamples;
-                working[idx + FILE_BYTE_OFFSET] = currentByteOffset;
+                working[idx + FILE_BYTE_OFFSET] = pos;
                 working[idx + CHUNK_LENGTH] = payloadLength;
-                working[idx + FRAME_TIMESTAMP] = timestamp;
+                working[idx + FRAME_TIMESTAMP] = cumulativeSamples * NANOS_PER_SECOND / sampleRate;
                 count++;
-                // TODO: accumulate true sample counts from chunk headers once format is known.
-                cumulativeSamples += payloadLength; // placeholder until samples-per-chunk is decoded
+                cumulativeSamples += sampleCountOrRecordType;
             }
 
-            currentByteOffset += HEADER_BYTES + (long) payloadLength;
+            pos = payloadStart + payloadLength;
         }
 
         this.chunkCount = count;
+        this.totalSamples = cumulativeSamples;
         this.table = new long[count * STRIDE];
         System.arraycopy(working, 0, this.table, 0, this.table.length);
     }
@@ -77,17 +91,37 @@ public final class ChunkIndex {
         return chunkCount;
     }
 
+    /**
+     * Total decoded sample count across every indexed audio chunk.
+     */
+    public long totalSamples() {
+        return totalSamples;
+    }
+
     public long[] table() {
         return table;
     }
 
     /**
-     * Binary search over sample offsets. Returns the chunk index containing {@code sample},
-     * or {@code -1} if out of range.
+     * Upper-bound binary search over sample offsets. Returns the index of the
+     * chunk containing {@code sample}, or {@code -1} if {@code sample} is negative
+     * or beyond {@link #totalSamples()}.
      */
     public int findChunkBySample(long sample) {
-        // TODO: implement binary search on SAMPLE_OFFSET column.
-        return -1;
+        if (chunkCount == 0 || sample < 0 || sample >= totalSamples) {
+            return -1;
+        }
+        int lo = 0;
+        int hi = chunkCount - 1;
+        while (lo < hi) {
+            int mid = (lo + hi + 1) >>> 1;
+            if (sampleOffset(mid) <= sample) {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        return lo;
     }
 
     public long sampleOffset(int chunkIndex) {

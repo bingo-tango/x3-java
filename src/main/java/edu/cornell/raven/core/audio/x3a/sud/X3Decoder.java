@@ -1,7 +1,6 @@
 package edu.cornell.raven.core.audio.x3a.sud;
 
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 import java.nio.file.Path;
 
 public class X3Decoder implements AutoCloseable {
@@ -14,16 +13,15 @@ public class X3Decoder implements AutoCloseable {
     // Config metadata extracted from Phase 1 (sample rate, channels, bit depth, device tags)
     private final FileMetadata metadata;
 
-    // Phase 2: Flattened In-Memory Index Table
-    // Layout per chunk: [0]=Sample_Offset, [1]=File_Byte_Offset, [2]=Chunk_Length, [3]=Frame_Timestamp
-    private long[] indexTable;
-    private int totalChunks;
+    // Phase 2: Flattened in-memory index table (see ChunkIndex for column layout)
+    private final ChunkIndex chunkIndex;
 
     public X3Decoder(Path sudFilePath) throws Exception {
         this.mapper = new SudFileMapper(sudFilePath);
         this.mappedFile = mapper.mappedFile();
         this.metadata = mapper.parseHeader();
-        buildInMemoryIndexTable();
+        this.chunkIndex = new ChunkIndex();
+        this.chunkIndex.build(mappedFile, metadata.sampleRate());
     }
 
     /**
@@ -35,46 +33,11 @@ public class X3Decoder implements AutoCloseable {
     }
 
     /**
-     * Phase 2: Ultra-fast single pass index builder skipping chunk payloads.
-     * Generates a flat in-memory index table allowing random seeking without sidecar files.
+     * Phase 2 in-memory index table, allowing random seeking by sample without
+     * {@code .sudx} sidecar files.
      */
-    private void buildInMemoryIndexTable() {
-        // Dummy implementation framework for coding agent to populate:
-        long currentByteOffset = 128; // Skip file header
-        long fileSize = mappedFile.byteSize();
-        
-        // Dynamic array scaling or precise sizing logic goes here
-        this.indexTable = new long[4000]; // Multiples of 4 elements per indexed block
-        this.totalChunks = 0;
-
-        final int headerBytes = 13;
-        while (currentByteOffset + headerBytes <= fileSize) {
-            // Read chunk headers using zero-heap off-heap ValueLayouts
-            byte chunkType = mappedFile.get(ValueLayout.JAVA_BYTE, currentByteOffset);
-            int payloadLength = mappedFile.get(ValueLayout.JAVA_INT_UNALIGNED, currentByteOffset + 1);
-            long timestamp = mappedFile.get(ValueLayout.JAVA_LONG_UNALIGNED, currentByteOffset + 5);
-
-            if (payloadLength < 0 || currentByteOffset + headerBytes + (long) payloadLength > fileSize) {
-                break;
-            }
-
-            if (chunkType == 0x41) { // Example identifier for Acoustic Audio Chunk
-                int idx = totalChunks * 4;
-                if (idx + 3 >= indexTable.length) {
-                    long[] grown = new long[indexTable.length * 2];
-                    System.arraycopy(indexTable, 0, grown, 0, indexTable.length);
-                    indexTable = grown;
-                }
-                indexTable[idx]     = 0; // Cumulative sample count calculation goes here
-                indexTable[idx + 1] = currentByteOffset;
-                indexTable[idx + 2] = payloadLength;
-                indexTable[idx + 3] = timestamp;
-                totalChunks++;
-            }
-            
-            // Fast skip to the next chunk without loading data payloads onto heap
-            currentByteOffset += headerBytes + (long) payloadLength;
-        }
+    public ChunkIndex chunkIndex() {
+        return chunkIndex;
     }
 
     /**
@@ -82,7 +45,7 @@ public class X3Decoder implements AutoCloseable {
      * CRITICAL RULE: Destination array must be pre-allocated by the caller to preserve zero allocation.
      */
     public int decodeSamplesInt(long startSample, int length, short[] destIntBuffer) {
-        // 1. Coding agent maps startSample to indexTable via binary search
+        // 1. Coding agent maps startSample to a chunk via chunkIndex.findChunkBySample
         // 2. Unpack the variable-bit X3 streams directly from mappedFile segment
         // 3. Write directly into the contiguous 1D destIntBuffer
         

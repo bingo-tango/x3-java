@@ -40,41 +40,55 @@
   config (what downstream WAV writers need), not the raw 192000 Hz source rate.
 - Device tag recovered via `<EVENT><HARDWARE_ID> ST600 </HARDWARE_ID></EVENT>`.
 
-## Phase 2 — In-Memory Index Table Generator: NOT STARTED
+## Phase 2 — In-Memory Index Table Generator: DONE
 
-`X3Decoder.buildInMemoryIndexTable()` is still the original stub and has **incorrect
-assumptions** that need to be replaced, not incrementally patched:
-
-- It assumes a **13-byte** chunk header (`type byte + 4-byte length + 8-byte
-  timestamp`) and skips a fixed 128-byte file header first. Neither matches
-  reality — the real header is **20 bytes** and is uniform across metadata *and*
-  audio records (see `SudFileMapper.RECORD_HEADER_LAYOUT`). That layout/VarHandle
-  work should be reused (or factored into a shared internal helper) rather than
-  re-derived, to avoid the two classes drifting again like `X3Decoder` vs
-  `SudFileMapper` did before the Phase 1 fix.
-- The index walk needs to mirror `parseHeader()`'s "walk every record, skip the
-  ones you don't care about via `payloadLength`" pattern — i.e. skip `recordType
-  == 1` metadata records (including the trailing end-of-session one) while
-  indexing everything else as audio chunks, rather than stopping at the first
-  metadata/non-audio record encountered.
-- **Open question before implementation:** what the `recordType` field actually
-  encodes for audio chunks (it's not a simple enum — see above). Needs a short
-  empirical pass (similar to how Phase 1's format was reverse-engineered) before
-  designing `ChunkType`. It's possible chunk classification doesn't need this
-  field at all — "not metadata" may be sufficient, same as Phase 1 treats it.
-- **Open question:** where `Frame_Timestamp` (4th index element) comes from. The
-  header's `sessionId` is opaque/constant, `sequence` is opaque and monotonic-ish,
-  and `recordTag` (6 bytes) is unexplored. None was confirmed as a literal
-  timestamp in Phase 1's investigation — it may need to be computed from
-  cumulative sample count × sample period rather than read directly from a field.
-- Sample-offset math should account for the decimation chain above: audio chunks
-  are already encoded at the **decimated** 48 kHz/16-bit/1-channel rate (per `<CFG
-  ID="3"/ID="4">`), not the raw 192 kHz source rate — worth double-checking
-  `BLKLEN=16` against however `Chunk_Length` ends up being interpreted (bytes vs.
-  samples).
-- The real fixture (`7867.230815161432.sud`, ~83 MB, ~40,673 non-metadata records)
-  is a good stress fixture for the index table and binary-search seeking — much
-  larger scale than the existing all-zero synthetic test files.
+- Both open questions from the original stub were resolved empirically against
+  the real fixture (`src/test/resources/7867.230815161432.sud`) before writing
+  any implementation:
+  - **The header field previously assumed to be `recordType` is not a type
+    enum at all — for audio chunks, it *is* that chunk's decoded sample
+    count** (always a multiple of `BLKLEN=16`). Confirmed by summing the field
+    across all 40,673 non-metadata records in the fixture: the sum is exactly
+    **172,813,552**, matching OceanInstruments' own `SampleCount="172813552"`
+    attribute in the reference export (`7867.230815161432.log.xml`) byte for
+    byte. The value `1` for metadata records is simply a sentinel that never
+    collides with a real (multiple-of-16, ≥16) sample count, so "not
+    metadata" (`!= 1`) remains sufficient for chunk classification — no
+    `ChunkType` enum was needed, and the speculative one from the original
+    stub was deleted along with its test.
+  - **`Frame_Timestamp`** is computed, not read: cumulative decoded sample
+    count before the chunk, converted to nanoseconds via the decoded sample
+    rate (`FileMetadata.sampleRate()`, 48 kHz in the fixture) — no header
+    field is a literal timestamp.
+- The 20-byte record header layout/VarHandles are now factored out of
+  `SudFileMapper` into a shared package-private `RecordHeader` helper (layout,
+  `hasSyncAt`/`payloadLength`/`sampleCountOrRecordType`/`isMetadata`, and
+  `findFirstSync`), used by both `SudFileMapper.parseHeader()` and
+  `ChunkIndex.build()` — avoiding the drift the original stub's independent
+  13-byte-header reimplementation would have caused.
+- `ChunkIndex.build(MemorySegment, int sampleRate)` walks every record via
+  `RecordHeader`, skips metadata (including the trailing end-of-session
+  record), and indexes everything else using the *real* per-chunk sample
+  count for `Sample_Offset`/`Frame_Timestamp` (not `payloadLength`, which is
+  the compressed byte length and only appropriate for `Chunk_Length`).
+  `findChunkBySample()` is a real upper-bound binary search;
+  `totalSamples()` gives the bound for range checks.
+- `X3Decoder` now holds a real `ChunkIndex` (built in the constructor from
+  `mapper.mappedFile()` + `metadata.sampleRate()`) instead of the dummy
+  13-byte-header stub with its own duplicate `indexTable`/`totalChunks`
+  fields — same "stop duplicating, delegate" fix pattern as Phase 1's
+  `X3Decoder --> SudFileMapper` convergence.
+- `ChunkIndexTest` covers metadata-skipping, cumulative sample offset/
+  timestamp correctness, `totalSamples()`, and `findChunkBySample` boundary
+  cases against synthetic 20-byte-header fixtures, plus a real-fixture
+  integration test asserting `chunkCount() == 40673` and
+  `totalSamples() == 172_813_552` against the actual 83 MB `.sud` file
+  (mirrors Phase 1's real-fixture cross-check in `SudFileMapperTest`).
+- **Still unexplored, not needed for indexing:** the exact meaning of
+  `sequence` (resets at what look like session/segment boundaries) and the
+  6-byte `recordTag`. Neither was needed to build a correct index; may matter
+  for later phases (e.g. detecting dropped/out-of-order chunks) but is
+  deferred rather than blocking.
 
 ## Phases 3–6
 
