@@ -90,6 +90,40 @@
   for later phases (e.g. detecting dropped/out-of-order chunks) but is
   deferred rather than blocking.
 
-## Phases 3–6
+## Phase 3 — JIT-Friendly Audio & Bitstream Unpacking: DONE
+
+- Implemented X3V2 decode against the public codec (Johnson et al. / PAMGuard
+  `X3FrameDecode` / x3-rust), not a speculative custom bitstream:
+  - `BitstreamReader`: MSB-first variable-bit reads (`readBits`, `countZeroBits`)
+    over `MemorySegment`, with optional **pair-wise byte swap** on read
+    (`logicalIndex ^ 1`). SoundTrap stores X3 payloads the same way as metadata
+    text — every adjacent byte pair swapped — so SUD decode enables swap and
+    bare `.x3a` bodies leave it off (zero heap copy of the payload).
+  - `X3AudioDecoder`: filter-state first sample(s) + blocks of `BLKLEN` residuals.
+    Per block: 2-bit code → RICE0 / RICE1 / RICE3 / BFP, inverse Rice table,
+    signed BFP fields, diff-filter integrate. Honours SoundTrap **short-block**
+    headers (`code==0 && nb==0`) that shrink the remaining sample count mid-frame
+    (same path as PAMGuard `X3Handler.BlockDecode`). Multi-channel output is
+    interleaved into a single caller-owned `short[]` (no `short[][]`).
+  - Dual export: `decodeChunkInt` and `decodeChunkFloat` (scale by
+    `1/32768` in a pure countable loop into caller-owned `float[]`).
+- `X3Decoder` facade now actually decodes: maps `startSample` via
+  `ChunkIndex`, slices each chunk payload from the mapped file, runs
+  `X3AudioDecoder` with SUD swap on, copies the requested window into the
+  caller buffer. Reuses `chunkScratch` / `floatScratch` (grow-once) so the
+  steady-state path stays allocation-free. `BLKLEN` is taken from metadata
+  XML (`<BLKLEN>16</BLKLEN>` in the fixture) with a safe default of 16.
+- Tests:
+  - `BitstreamReaderTest` — packed reads, zero-run count, pair-swap LE→BE.
+  - `X3AudioDecoderTest` — integrate/fixSign unit checks + x3-rust
+    `test_decode_block_ftype_2` reference vector (20 samples, no SUD swap).
+  - `X3DecoderTest.realFixture_decodesFirstWindow` — opens the 83 MB fixture,
+    decodes 4096 frames from sample 0, asserts non-zero dynamic range and
+    float scaling consistency with int path.
+- Performance rules: no heap alloc inside residual/math loops; flat 1D PCM;
+  block work is lock-free / scratch-local (virtual-thread ready for Phase 4);
+  integrate loop is a tight countable `for`.
+
+## Phases 4–6
 
 Not started. No changes to plan/scope.

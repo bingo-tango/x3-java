@@ -6,8 +6,9 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class X3DecoderTest {
 
@@ -15,7 +16,7 @@ class X3DecoderTest {
     Path tempDir;
 
     @Test
-    void openDecodeClose_stubPaths() throws Exception {
+    void openDecodeClose_emptyFileDefaults() throws Exception {
         Path sud = tempDir.resolve("tiny.sud");
         Files.write(sud, new byte[256]);
 
@@ -23,8 +24,9 @@ class X3DecoderTest {
             short[] ints = new short[32];
             float[] floats = new float[32];
 
-            assertEquals(32, decoder.decodeSamplesInt(0L, 32, ints));
-            assertEquals(32, decoder.decodeSamplesFloat(0L, 32, floats));
+            // No audio chunks → nothing to decode
+            assertEquals(0, decoder.decodeSamplesInt(0L, 32, ints));
+            assertEquals(0, decoder.decodeSamplesFloat(0L, 32, floats));
         }
     }
 
@@ -40,6 +42,48 @@ class X3DecoderTest {
             assertEquals(1, metadata.channels());
             assertEquals(16, metadata.bitDepth());
         }
+    }
+
+    @Test
+    void realFixture_decodesFirstWindow() throws Exception {
+        Path fixture = Path.of("src/test/resources/7867.230815161432.sud");
+        if (!Files.exists(fixture)) {
+            return;
+        }
+        try (X3Decoder decoder = new X3Decoder(fixture)) {
+            assertEquals(48_000, decoder.metadata().sampleRate());
+            assertEquals(1, decoder.metadata().channels());
+            assertEquals(172_813_552L, decoder.chunkIndex().totalSamples());
+
+            int n = 4096;
+            short[] pcm = new short[n];
+            int got = decoder.decodeSamplesInt(0L, n, pcm);
+            assertEquals(n, got);
+
+            // Not all zeros (filter state of first chunk is non-zero ambient)
+            boolean anyNonZero = false;
+            int min = Integer.MAX_VALUE;
+            int max = Integer.MIN_VALUE;
+            for (short s : pcm) {
+                if (s != 0) {
+                    anyNonZero = true;
+                }
+                min = Math.min(min, s);
+                max = Math.max(max, s);
+            }
+            assertTrue(anyNonZero, "decoded PCM should not be all zeros");
+            assertTrue(max > min, "decoded PCM should have dynamic range");
+
+            float[] floats = new float[n];
+            assertEquals(n, decoder.decodeSamplesFloat(0L, n, floats));
+            assertEquals(pcm[0] / 32768.0f, floats[0], 1e-6f);
+        }
+    }
+
+    @Test
+    void parseBlockLen_readsCfg() {
+        assertEquals(16, X3Decoder.parseBlockLen("<BLKLEN>16</BLKLEN>", 20));
+        assertEquals(20, X3Decoder.parseBlockLen("", 20));
     }
 
     @Test
