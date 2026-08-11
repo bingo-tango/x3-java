@@ -42,7 +42,8 @@ jmh {
     warmupIterations = 1
     iterations = 1
     fork = 1
-    benchmarkMode = ['thrpt', 'avgt']
+    // Leave benchmarkMode unset so per-class @BenchmarkMode wins (Throughput microbenches
+    // vs SingleShotTime for ConversionBenchmark file I/O).
     timeUnit = 's'
     failOnError = true
     duplicateClassesStrategy = DuplicatesStrategy.EXCLUDE
@@ -61,6 +62,8 @@ jmh {
 //   ./gradlew jmhJar
 // Filter benchmarks:
 //   ./gradlew jmh -Pjmh.includes=.*BitstreamReader.*
+// Paper-suite conversion CSV (minimal single-shot JMH):
+//   ./gradlew conversionBenchmark
 tasks.named('jmh') {
     group = 'benchmark'
     description = 'Runs JMH microbenchmarks for the X3 decoder (src/jmh/java).'
@@ -70,6 +73,24 @@ tasks.register('benchmark') {
     group = 'benchmark'
     description = 'Alias for the jmh task.'
     dependsOn 'jmh'
+}
+
+tasks.register('conversionBenchmark', JavaExec) {
+    group = 'benchmark'
+    description = 'Paper-suite wav↔x3a JMH conversion benchmark with CSV summary (minimal warmup/iters).'
+    dependsOn 'jmhCompileGeneratedClasses'
+    // jmh source set + bytecode-generator output (META-INF/BenchmarkList + * _jmhType classes)
+    classpath = sourceSets.jmh.runtimeClasspath + files(
+            layout.buildDirectory.dir('jmh-generated-classes'),
+            layout.buildDirectory.dir('jmh-generated-resources'))
+    mainClass = 'edu.cornell.raven.core.audio.x3a.ConversionBenchmark'
+    // Optional: -Pconv.w=1 -Pconv.i=1
+    if (project.hasProperty('conv.w')) {
+        args '-w', project.property('conv.w')
+    }
+    if (project.hasProperty('conv.i')) {
+        args '-i', project.property('conv.i')
+    }
 }
 
 jlink {

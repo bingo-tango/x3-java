@@ -51,3 +51,6 @@ Thumbs.db
 /test/*.flac
 /test/*_from_x3a.wav
 /test/*_from_flac.wav
+/test/*.jmh.x3a
+/test/*.jmh_pre.x3a
+/test/*.jmh_from_x3a.wav

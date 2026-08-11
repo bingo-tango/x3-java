@@ -2,14 +2,9 @@ package edu.cornell.raven.core.audio.x3a;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.lang.foreign.Arena;
-import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -118,6 +113,9 @@ public final class X3Files {
 
     /**
      * Decode a full archive image to interleaved PCM + stream metadata.
+     * <p>
+     * Single pre-sized PCM buffer; frame payloads are zero-copy slices of the archive
+     * array (no per-frame arena or chunk list).
      */
     public static DecodedArchive decodeArchive(byte[] archive) {
         if (archive.length < X3FrameHeader.ARCHIVE_ID.length + X3FrameHeader.LENGTH) {
@@ -145,19 +143,33 @@ public final class X3Files {
         int sampleRate = parseInt(FS, xml, 48000);
         int blockLen = parseInt(BLKLEN, xml, X3AudioEncoder.DEFAULT_BLOCK_LEN);
         int[] rice = parseTriple(CODES, xml, X3AudioEncoder.DEFAULT_RICE_ORDERS);
-        // thresholds optional for decode
         X3AudioDecoder decoder = new X3AudioDecoder(blockLen, rice);
 
-        List<short[]> chunks = new ArrayList<>();
-        int totalSamples = 0;
+        // Pass 1: sum PCM samples from frame headers (cheap; exact capacity).
         int channels = 1;
-
-        while (pos + X3FrameHeader.LENGTH <= archive.length) {
-            // Skip trailing padding / incomplete tail
-            if (archive.length - pos < X3FrameHeader.LENGTH) {
+        int totalSamples = 0;
+        int scan = pos;
+        while (scan + X3FrameHeader.LENGTH <= archive.length) {
+            int key = X3FrameHeader.getBe16(archive, scan);
+            if (key != X3FrameHeader.KEY) {
                 break;
             }
-            // Peek key
+            X3FrameHeader fh = X3FrameHeader.decode(archive, scan);
+            scan += X3FrameHeader.LENGTH;
+            if (fh.payloadLen <= 0 || scan + fh.payloadLen > archive.length) {
+                break;
+            }
+            if (fh.samples > 0) {
+                channels = Math.max(1, fh.channels);
+                totalSamples += fh.samples * channels;
+            }
+            scan += fh.payloadLen;
+        }
+
+        short[] pcm = totalSamples > 0 ? new short[totalSamples] : new short[0];
+        int out = 0;
+
+        while (pos + X3FrameHeader.LENGTH <= archive.length) {
             int key = X3FrameHeader.getBe16(archive, pos);
             if (key != X3FrameHeader.KEY) {
                 break;
@@ -180,25 +192,17 @@ public final class X3Files {
 
             channels = Math.max(1, fh.channels);
             int nSamples = fh.samples * channels;
-            short[] dest = new short[nSamples];
-
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment payload = arena.allocate(fh.payloadLen);
-                for (int i = 0; i < fh.payloadLen; i++) {
-                    payload.set(ValueLayout.JAVA_BYTE, i, archive[pos + i]);
-                }
-                decoder.decodeChunkInt(payload, fh.samples, channels, dest, 0, false);
-            }
-            chunks.add(dest);
-            totalSamples += nSamples;
+            // Direct heap range — no Arena / MemorySegment on the archive hot path.
+            decoder.decodeChunkInt(archive, pos, fh.payloadLen, fh.samples, channels, pcm, out, false);
+            out += nSamples;
             pos += fh.payloadLen;
         }
 
-        short[] pcm = new short[totalSamples];
-        int o = 0;
-        for (short[] c : chunks) {
-            System.arraycopy(c, 0, pcm, o, c.length);
-            o += c.length;
+        if (out != pcm.length) {
+            // Defensive: header scan and decode disagreed (should not happen).
+            short[] trim = new short[out];
+            System.arraycopy(pcm, 0, trim, 0, out);
+            pcm = trim;
         }
         return new DecodedArchive(sampleRate, channels, pcm);
     }

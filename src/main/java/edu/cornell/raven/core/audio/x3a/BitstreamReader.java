@@ -4,35 +4,73 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
 /**
- * Phase 3: Variable-bit-length reader over an off-heap payload slice.
+ * Phase 3: Variable-bit-length reader over a payload slice.
  * Tracks bit cursors in primitive registers for JIT-friendly unpacking.
  * <p>
  * Bits are consumed MSB-first within each byte (X3 / SoundTrap convention).
  * When {@code swapBytePairs} is enabled, physical bytes are read as
  * {@code index ^ 1} so little-endian on-disk 16-bit words become the big-endian
  * stream the codec expects (same pair-swap PAMGuard applies before X3 unpack).
+ * <p>
+ * Hot path matches x3-rust: a left-aligned 32-bit window refilled 4 bytes at a
+ * time, with {@link Integer#numberOfLeadingZeros(int)} for rice unary runs.
+ * Prefer the {@code byte[]} constructors for heap archives (no FFM call per byte);
+ * {@link MemorySegment} is for mmap SUD payloads.
  */
 public final class BitstreamReader {
 
-    private final MemorySegment payload;
+    private static final int BIT_LEN = 32;
+    private static final int BYTES_PER_WORD = 4;
+
+    /** Heap payload (preferred for .x3a); null when using {@link #seg}. */
+    private final byte[] heap;
+    private final int heapBase;
+    private final MemorySegment seg;
     private final long byteLength;
     private final boolean swapBytePairs;
 
+    /** Next logical byte index to load into the window. */
     private long bytePos;
-    private int bitBuffer;
-    private int bitsInBuffer;
+    /** Left-aligned bit window (valid bits in the high {@link #remBit} positions). */
+    private int leadingWord;
+    /** Number of valid bits remaining in {@link #leadingWord}. */
+    private int remBit;
 
     public BitstreamReader(MemorySegment payload) {
         this(payload, false);
     }
 
     public BitstreamReader(MemorySegment payload, boolean swapBytePairs) {
-        this.payload = payload;
+        this.heap = null;
+        this.heapBase = 0;
+        this.seg = payload;
         this.byteLength = payload.byteSize();
         this.swapBytePairs = swapBytePairs;
         this.bytePos = 0L;
-        this.bitBuffer = 0;
-        this.bitsInBuffer = 0;
+        loadNextWord();
+    }
+
+    /**
+     * Zero-copy reader over a heap byte range (fast path for archive frame bodies).
+     */
+    public BitstreamReader(byte[] payload, int offset, int length, boolean swapBytePairs) {
+        if (payload == null) {
+            throw new NullPointerException("payload");
+        }
+        if (offset < 0 || length < 0 || offset + length > payload.length) {
+            throw new IndexOutOfBoundsException("offset/length out of range");
+        }
+        this.heap = payload;
+        this.heapBase = offset;
+        this.seg = null;
+        this.byteLength = length;
+        this.swapBytePairs = swapBytePairs;
+        this.bytePos = 0L;
+        loadNextWord();
+    }
+
+    public BitstreamReader(byte[] payload, boolean swapBytePairs) {
+        this(payload, 0, payload.length, swapBytePairs);
     }
 
     /**
@@ -42,70 +80,125 @@ public final class BitstreamReader {
         if (width <= 0 || width > 32) {
             throw new IllegalArgumentException("width must be in 1..32");
         }
-        ensureBits(width);
-        int shift = bitsInBuffer - width;
-        int mask = (width == 32) ? -1 : ((1 << width) - 1);
-        int value = (bitBuffer >>> shift) & mask;
-        bitsInBuffer -= width;
-        if (bitsInBuffer == 0) {
-            bitBuffer = 0;
-        } else {
-            bitBuffer &= (1 << bitsInBuffer) - 1;
+        if (width <= remBit) {
+            int result = leadingWord >>> (BIT_LEN - width);
+            incBits(width);
+            return result;
         }
-        return value;
+        int rem = width - remBit;
+        int result = leadingWord >>> (BIT_LEN - width);
+        incBits(remBit);
+        if (remBit < rem) {
+            throw underrun(width);
+        }
+        result |= leadingWord >>> (BIT_LEN - rem);
+        incBits(rem);
+        return result;
     }
 
     /**
      * Counts and consumes consecutive zero bits (does not consume the terminating one-bit).
+     * Spans multiple 32-bit windows when needed (rice unary runs).
      */
     public int countZeroBits() {
+        if (remBit == 0 && bytePos >= byteLength) {
+            throw underrun(1);
+        }
         int count = 0;
         while (true) {
-            ensureBits(1);
-            int shift = bitsInBuffer - 1;
-            int bit = (bitBuffer >>> shift) & 1;
-            if (bit != 0) {
-                return count;
+            int z = Integer.numberOfLeadingZeros(leadingWord);
+            if (z > remBit) {
+                // Only the high remBit bits are live; low padding zeros must not count.
+                count += remBit;
+                if (bytePos >= byteLength) {
+                    leadingWord = 0;
+                    remBit = 0;
+                    return count;
+                }
+                loadNextWord();
+                continue;
             }
-            bitsInBuffer--;
-            if (bitsInBuffer == 0) {
-                bitBuffer = 0;
-            } else {
-                bitBuffer &= (1 << bitsInBuffer) - 1;
-            }
-            count++;
+            count += z;
+            incBits(z);
+            return count;
         }
     }
 
     public boolean hasRemaining() {
-        return bytePos < byteLength || bitsInBuffer > 0;
+        return remBit > 0 || bytePos < byteLength;
     }
 
     public long bytePosition() {
-        return bytePos;
+        long loaded = bytePos;
+        int unusedBytesInWindow = remBit >> 3;
+        return loaded - unusedBytesInWindow - ((remBit & 7) != 0 ? 1 : 0);
     }
 
     public int bitsBuffered() {
-        return bitsInBuffer;
+        return remBit;
     }
 
-    private void ensureBits(int width) {
-        while (bitsInBuffer < width && bytePos < byteLength) {
-            int next = Byte.toUnsignedInt(payload.get(ValueLayout.JAVA_BYTE, physicalIndex(bytePos)));
-            bytePos++;
-            bitBuffer = (bitBuffer << 8) | next;
-            bitsInBuffer += 8;
+    private void incBits(int n) {
+        if (n <= 0) {
+            if (n == 0 && remBit == 0) {
+                loadNextWord();
+            }
+            return;
         }
-        if (bitsInBuffer < width) {
-            throw new IllegalStateException("bitstream underrun: need " + width + " bits, have " + bitsInBuffer);
+        if (n < remBit) {
+            leadingWord <<= n;
+            remBit -= n;
+        } else if (n > remBit) {
+            int rem = n - remBit;
+            loadNextWord();
+            if (remBit < rem) {
+                throw underrun(n);
+            }
+            leadingWord <<= rem;
+            remBit -= rem;
+        } else {
+            loadNextWord();
         }
     }
 
-    private long physicalIndex(long logical) {
-        if (!swapBytePairs) {
-            return logical;
+    private void loadNextWord() {
+        long remaining = byteLength - bytePos;
+        if (remaining <= 0) {
+            leadingWord = 0;
+            remBit = 0;
+            return;
         }
-        // Swap adjacent bytes within each 16-bit word: 0↔1, 2↔3, ...
-        return logical ^ 1L;
+        if (remaining >= BYTES_PER_WORD) {
+            long p = bytePos;
+            int b0 = u8(p);
+            int b1 = u8(p + 1);
+            int b2 = u8(p + 2);
+            int b3 = u8(p + 3);
+            leadingWord = (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+            bytePos = p + BYTES_PER_WORD;
+            remBit = BIT_LEN;
+            return;
+        }
+        int n = (int) remaining;
+        int word = 0;
+        long p = bytePos;
+        for (int i = 0; i < n; i++) {
+            word |= u8(p + i) << (24 - (i << 3));
+        }
+        leadingWord = word;
+        bytePos = p + n;
+        remBit = n << 3;
+    }
+
+    private int u8(long logical) {
+        long phys = swapBytePairs ? (logical ^ 1L) : logical;
+        if (heap != null) {
+            return heap[heapBase + (int) phys] & 0xff;
+        }
+        return Byte.toUnsignedInt(seg.get(ValueLayout.JAVA_BYTE, phys));
+    }
+
+    private static IllegalStateException underrun(int need) {
+        return new IllegalStateException("bitstream underrun: need " + need + " bits");
     }
 }

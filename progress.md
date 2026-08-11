@@ -154,14 +154,32 @@
     `X3ARCHIV` + XML config frame + data frames.
 - Tests: CRC vectors, bit-packer vectors, encode↔decode lossless (quiet/BFP/stereo),
   synthetic and fixture WAV round-trips (`LI192_15s.wav`).
-- `ConversionBenchmarkTest`: round-trips every `./test/*.wav` through
-  `wav_to_x3a` / `x3a_to_wav`, asserts lossless PCM, and prints CSV metrics
-  (size, time, peak heap kB, compressed size + aggregate ratio/MB/s). Optional
-  FLAC comparison when a `flac` CLI is on PATH. Full paper suite lives under
-  `src/test/resources/` (`PI240`, `NO96`, `LI192`, `GR48`, `GI60`, `GI16`) and
-  is copied into `./test` for the run — do not replace with the short `*_15s`
-  clips or reported sizes/speeds will not match the reference table.
+- Paper-suite conversion timing is a JMH benchmark (`ConversionBenchmark` under
+  `src/jmh/java`): `SingleShotTime`, 1 warmup + 1 measurement fork, per-file
+  `@Param` for `GI16`/`GI60`/`GR48`/`LI192`/`NO96`/`PI240`. Run
+  `./gradlew conversionBenchmark` for rust-style CSV + aggregate MiB/s, or
+  `./gradlew jmh -Pjmh.includes=.*ConversionBenchmark.*`. Lossless checks stay
+  in `X3FilesTest`. Suite WAVs live under `src/test/resources/` and `./test` —
+  do not replace with short `*_15s` clips when comparing to the reference table.
 - Full `gradlew test`: BUILD SUCCESSFUL.
+
+## Decode hot-path speedups (x3a_to_wav): DONE
+
+Target: close the gap vs x3-rust (~470 MB/s decompress) without changing the codec.
+
+1. **`X3Files.decodeArchive`** — drop per-frame `Arena` + byte copy + chunk list;
+   header scan for exact PCM capacity; decode straight into one `short[]` via heap
+   `byte[]` ranges (no FFM on the archive path).
+2. **`BitstreamReader`** — left-aligned 32-bit window, 4-byte refill, multi-window
+   `countZeroBits` via `Integer.numberOfLeadingZeros`; heap + `MemorySegment`
+   backends (SUD pair-swap unchanged).
+3. **`X3AudioDecoder`** — fused rice/BFP + integrate; specialized RICE0 / RICE1 / RICE3
+   loops; larger inverse-rice table; heap-payload overload.
+4. **`WavPcm.write`** — slab LE pack + buffered stream write (no full-size second buffer).
+
+Paper suite after change (aggregate): decode **~223 MB/s** (was ~100–120); encode
+~148 MB/s; ratio unchanged 0.2386. Rust reference decode ~473 MB/s — remaining gap
+is mostly native I/O + tighter rice loops, not alloc thrash.
 
 ## Phases 5–6
 

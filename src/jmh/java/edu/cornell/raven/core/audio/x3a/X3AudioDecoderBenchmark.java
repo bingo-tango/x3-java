@@ -51,11 +51,11 @@ public class X3AudioDecoderBenchmark {
 
     @Benchmark
     public void decodeChunkInt(Blackhole blackhole) {
-        blackhole.consume(decoder.decodeChunkInt(payload, 1, intDest, 0));
+        blackhole.consume(decoder.decodeChunkInt(payload, 1, 1, intDest, 0));
     }
 
     @Benchmark
     public void decodeChunkFloat(Blackhole blackhole) {
-        blackhole.consume(decoder.decodeChunkFloat(payload, 1, floatDest, 0, scratch));
+        blackhole.consume(decoder.decodeChunkFloat(payload, 1, 1, floatDest, 0, scratch));
     }
 }

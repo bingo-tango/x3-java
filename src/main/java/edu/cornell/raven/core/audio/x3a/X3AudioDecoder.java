@@ -10,13 +10,16 @@ import java.lang.foreign.MemorySegment;
  * matching the Johnson et al. codec and the PAMGuard / x3-rust reference decoders.
  * SoundTrap {@code .SUD} payloads must be read with pair-wise endian swap
  * ({@code sudPayload=true}); bare {@code .x3a} frame bodies use {@code sudPayload=false}.
+ * <p>
+ * Rice and BFP paths fuse residual unpack with integrate (single pass), and rice
+ * orders 0/1/3 use specialized loops like x3-rust.
  */
 public final class X3AudioDecoder {
 
     private static final float SCALE_TO_UNIT = 1.0f / 32768.0f;
 
-    /** Inverse Rice residual table: 0, -1, 1, -2, 2, ... */
-    private static final short[] INV_RICE = makeInverseRice(64);
+    /** Inverse Rice residual table: 0, -1, 1, -2, 2, ... (large enough for pathological runs). */
+    private static final short[] INV_RICE = makeInverseRice(256);
 
     private static final int MAX_CHANNELS = 8;
     private static final int MAX_BLOCK_LEN = 64;
@@ -66,6 +69,21 @@ public final class X3AudioDecoder {
      */
     public int decodeChunkInt(MemorySegment payload, int sampleCount, int channels,
                               short[] dest, int destOffset, boolean sudPayload) {
+        return decodeChunkInt(new BitstreamReader(payload, sudPayload),
+                sampleCount, channels, dest, destOffset);
+    }
+
+    /**
+     * Heap-payload overload for archive frames (avoids per-byte {@link MemorySegment} access).
+     */
+    public int decodeChunkInt(byte[] payload, int offset, int length, int sampleCount, int channels,
+                              short[] dest, int destOffset, boolean sudPayload) {
+        return decodeChunkInt(new BitstreamReader(payload, offset, length, sudPayload),
+                sampleCount, channels, dest, destOffset);
+    }
+
+    private int decodeChunkInt(BitstreamReader br, int sampleCount, int channels,
+                               short[] dest, int destOffset) {
         if (channels <= 0 || channels > MAX_CHANNELS) {
             throw new IllegalArgumentException("channels must be in 1.." + MAX_CHANNELS);
         }
@@ -76,8 +94,6 @@ public final class X3AudioDecoder {
         if (destOffset < 0 || destOffset + need > dest.length) {
             throw new IllegalArgumentException("destination too small for " + need + " samples");
         }
-
-        BitstreamReader br = new BitstreamReader(payload, sudPayload);
 
         // Filter state: first sample per channel (big-endian 16-bit after optional pair-swap).
         for (int ch = 0; ch < channels; ch++) {
@@ -163,37 +179,111 @@ public final class X3AudioDecoder {
         }
 
         if (code > 0) {
-            unpackRice(br, out, n, riceOrders[code - 1]);
-            integrate(out, n, last);
-        } else {
-            unpackBfp(br, out, n, nb);
-            if (nb != 16) {
-                integrate(out, n, last);
+            int order = riceOrders[code - 1];
+            if (order == 0) {
+                unpackRice0Integrate(br, out, n, last);
+            } else if (order == 1) {
+                unpackRice1Integrate(br, out, n, last);
+            } else if (order == 3) {
+                unpackRice3Integrate(br, out, n, last);
+            } else {
+                unpackRiceIntegrate(br, out, n, last, order);
             }
+        } else {
+            unpackBfpIntegrate(br, out, n, nb, last);
         }
         return n;
     }
 
-    private static void unpackRice(BitstreamReader br, short[] out, int n, int riceOrder) {
+    /** RICE order-0: unary only (stop bit, no suffix); fuse integrate. */
+    private static void unpackRice0Integrate(BitstreamReader br, short[] out, int n, short last) {
+        int acc = last;
+        final short[] inv = INV_RICE;
+        final int invLen = inv.length;
         for (int k = 0; k < n; k++) {
-            int zeros = br.countZeroBits();
+            int index = br.countZeroBits();
             br.readBits(1); // terminating 1
-            int suffix = riceOrder == 0 ? 0 : br.readBits(riceOrder);
-            int index = (zeros << riceOrder) + suffix;
-            if (index < 0 || index >= INV_RICE.length) {
+            if (index >= invLen) {
                 throw new IllegalStateException("rice index out of range: " + index);
             }
-            out[k] = INV_RICE[index];
+            acc += inv[index];
+            out[k] = (short) acc;
         }
     }
 
-    private static void unpackBfp(BitstreamReader br, short[] out, int n, int nb) {
+    /** RICE order-1: stop+1 suffix bit read together; fuse integrate. */
+    private static void unpackRice1Integrate(BitstreamReader br, short[] out, int n, short last) {
+        int acc = last;
+        final short[] inv = INV_RICE;
+        final int invLen = inv.length;
+        for (int k = 0; k < n; k++) {
+            int zeros = br.countZeroBits();
+            // 1 stop bit + 1 suffix bit (MSB of the pair is the stop)
+            int bits = br.readBits(2);
+            int index = (zeros << 1) + (bits & 1);
+            if (index >= invLen) {
+                throw new IllegalStateException("rice index out of range: " + index);
+            }
+            acc += inv[index];
+            out[k] = (short) acc;
+        }
+    }
+
+    /** RICE order-3: stop+3 suffix bits read together; fuse integrate. */
+    private static void unpackRice3Integrate(BitstreamReader br, short[] out, int n, short last) {
+        int acc = last;
+        final short[] inv = INV_RICE;
+        final int invLen = inv.length;
+        for (int k = 0; k < n; k++) {
+            int zeros = br.countZeroBits();
+            int bits = br.readBits(4); // 1 stop + 3 suffix
+            int index = (zeros << 3) + (bits & 7);
+            if (index >= invLen) {
+                throw new IllegalStateException("rice index out of range: " + index);
+            }
+            acc += inv[index];
+            out[k] = (short) acc;
+        }
+    }
+
+    /** Generic rice order with fused integrate (fallback for non-standard orders). */
+    private static void unpackRiceIntegrate(BitstreamReader br, short[] out, int n, short last, int riceOrder) {
+        int acc = last;
+        final short[] inv = INV_RICE;
+        final int invLen = inv.length;
+        final int suffixMask = (1 << riceOrder) - 1;
+        final int packWidth = 1 + riceOrder;
+        for (int k = 0; k < n; k++) {
+            int zeros = br.countZeroBits();
+            int bits = br.readBits(packWidth);
+            int index = (zeros << riceOrder) + (bits & suffixMask);
+            if (index >= invLen) {
+                throw new IllegalStateException("rice index out of range: " + index);
+            }
+            acc += inv[index];
+            out[k] = (short) acc;
+        }
+    }
+
+    /** BFP / pass-through with fused integrate when {@code nb != 16}. */
+    private static void unpackBfpIntegrate(BitstreamReader br, short[] out, int n, int nb, short last) {
         if (nb <= 0 || nb > 16) {
             throw new IllegalStateException("invalid BFP width: " + nb);
         }
+        if (nb == 16) {
+            for (int i = 0; i < n; i++) {
+                out[i] = (short) br.readBits(16);
+            }
+            return;
+        }
+        int acc = last;
+        int half = 1 << (nb - 1);
+        int offs = half << 1;
         for (int i = 0; i < n; i++) {
             int raw = br.readBits(nb);
-            out[i] = fixSign(raw, nb);
+            int d = raw >= half ? raw - offs : raw;
+            acc += d;
+            out[i] = (short) acc;
         }
     }
 
