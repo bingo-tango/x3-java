@@ -3,6 +3,7 @@ plugins {
     id 'application'
     id 'org.beryx.jlink' version '4.1.1'
     id 'me.champeau.jmh' version '0.7.3'
+    id 'org.openjfx.javafxplugin' version '0.1.0'
 }
 
 group = 'edu.cornell.raven.core.audio.x3a'
@@ -20,6 +21,40 @@ java {
 
 application {
     mainClass = 'edu.cornell.raven.core.audio.x3a.sud.X3Decoder'
+}
+
+// Phase 6: minimal JavaFX drag-and-drop verification app — test scaffolding, not
+// library code. Its own source set keeps JavaFX out of main's dependencies and
+// out of module-info.java (see development-plan.md Phase 6).
+sourceSets {
+    tools {
+        java {
+            srcDirs = ['src/tools/java']
+        }
+        compileClasspath += sourceSets.main.output
+        runtimeClasspath += sourceSets.main.output
+    }
+}
+
+javafx {
+    version = '21.0.2'
+    modules = ['javafx.controls']
+    configuration = 'toolsImplementation'
+}
+
+tasks.register('runTestApp', JavaExec) {
+    group = 'application'
+    description = 'Runs the Phase 6 JavaFX drag-and-drop verification app (tools source set).'
+    mainClass = 'edu.cornell.raven.core.audio.x3a.tools.X3VerificationApp'
+    // The javafx plugin only auto-wires --module-path/--add-modules onto the
+    // application plugin's "run" task; this is a custom-named JavaExec task, so
+    // split the javafx jars onto an explicit module path ourselves.
+    doFirst {
+        def toolsRuntime = sourceSets.tools.runtimeClasspath
+        def javafxJars = toolsRuntime.filter { it.name.startsWith('javafx-') }
+        classpath = toolsRuntime - javafxJars
+        jvmArgs = ['--module-path', javafxJars.asPath, '--add-modules', 'javafx.controls']
+    }
 }
 
 dependencies {

@@ -225,6 +225,41 @@ and lands within ~5% of it running strictly sequential. Single-shot JMH with 1 w
 iteration has genuine run-to-run variance — treat these as representative, not
 lab-precise, numbers.
 
-## Phases 5–6
+## Phase 5
 
-Not started (Phase 6 can call `X3Files` for `.x3a` paths).
+Skipped (upstream integration design doc, not implemented in this repo).
+
+## Phase 6 — Minimal JavaFX drag-and-drop verification app: DONE
+
+- New `tools` Gradle source set (`src/tools/java`), separate from `main`/`test`:
+  `org.openjfx.javafxplugin` (`0.1.0`, JavaFX `21.0.2`, `javafx.controls` only)
+  scoped to `toolsImplementation`; `main`'s output is on its classpath.
+  `module-info.java` untouched (still exports only the 2 core packages);
+  `application.mainClass` stays `X3Decoder`. A `runTestApp` `JavaExec` task
+  launches the GUI, with an explicit `--module-path`/`--add-modules
+  javafx.controls` split off the javafx jars (the javafx plugin only
+  auto-wires the application plugin's `run` task, not a custom-named one).
+- `X3VerificationApp` (`edu.cornell.raven.core.audio.x3a.tools`): single
+  `Stage` / `StackPane` drop zone, accepts exactly one `.sud`/`.x3a` file on
+  drag-over, converts on a virtual thread with `Platform.runLater` status
+  updates (`Converting… → Wrote …wav` / `Failed: …`), drop zone disabled
+  mid-conversion. `.sud` drives `X3Decoder.decodeSamplesInt` in fixed
+  65536-frame windows through one reused `short[]` buffer (guardrail 1);
+  `.x3a` decodes via the existing `X3Files.decodeArchive`.
+- `StreamingWavWriter` (same package): true streaming RIFF/WAVE writer —
+  header with placeholder sizes written up front, PCM appended per window,
+  RIFF/data chunk sizes back-patched on `close()`. Kept separate from
+  `WavPcm.write` (which needs the whole PCM buffer up front) specifically so
+  the `.SUD` path never buffers a full file's decoded PCM in memory.
+- Extended past the doc's literal WAV-only scope per explicit user request:
+  both input types also write an XML metadata sidecar (`<name>.xml`, skipped
+  if empty) — `FileMetadata.xmlConfig()` for `.sud` (already anticipated by
+  `SudFileMapper`'s own Javadoc), and a new `xml` field added to
+  `X3Files.DecodedArchive` exposing the archive's embedded `<X3ARCH>`/`<CFG>`
+  frame for `.x3a` (previously parsed internally and discarded).
+- Verified via `./gradlew compileToolsJava`/`test` and a throwaway (deleted)
+  smoke-test class exercising both conversion paths directly: `.sud` fixture
+  (`7867.230815161432.sud`) decoded all 172,813,552 samples at 48000 Hz/1ch
+  with a 1085-byte XML sidecar; `.x3a` fixture (`./test/GI16.x3a`) decoded
+  4,800,000 frames at 16000 Hz/1ch with a 292-byte XML sidecar. Also launched
+  `./gradlew runTestApp` directly to confirm the JavaFX window opens cleanly.

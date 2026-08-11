@@ -229,7 +229,7 @@ public final class X3Files {
                     sampleCount, frameChannels, pcmOffset, pcm, options);
         }
 
-        return new DecodedArchive(sampleRate, channels, pcm);
+        return new DecodedArchive(sampleRate, channels, pcm, xml);
     }
 
     private static void decodeFramesParallel(byte[] archive, X3AudioDecoder decoder, int frameCount,
@@ -296,11 +296,14 @@ public final class X3Files {
         public final int sampleRate;
         public final int channels;
         public final short[] pcm;
+        /** Embedded {@code <X3ARCH>}/{@code <CFG>} config XML, recovered verbatim from the archive. */
+        public final String xml;
 
-        public DecodedArchive(int sampleRate, int channels, short[] pcm) {
+        public DecodedArchive(int sampleRate, int channels, short[] pcm, String xml) {
             this.sampleRate = sampleRate;
             this.channels = channels;
             this.pcm = pcm;
+            this.xml = xml;
         }
 
         public int frames() {
