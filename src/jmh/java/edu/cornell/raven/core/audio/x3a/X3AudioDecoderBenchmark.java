@@ -18,6 +18,8 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.util.concurrent.TimeUnit;
 
+/// Measures [X3AudioDecoder]'s per-chunk decode cost in isolation from file I/O or
+/// container framing, to catch regressions in the codec itself.
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
 @Warmup(iterations = 1, time = 1)
@@ -49,11 +51,13 @@ public class X3AudioDecoderBenchmark {
         arena.close();
     }
 
+    /// Int chunk decode path.
     @Benchmark
     public void decodeChunkInt(Blackhole blackhole) {
         blackhole.consume(decoder.decodeChunkInt(payload, 1, 1, intDest, 0));
     }
 
+    /// Float chunk decode path, including normalization.
     @Benchmark
     public void decodeChunkFloat(Blackhole blackhole) {
         blackhole.consume(decoder.decodeChunkFloat(payload, 1, 1, floatDest, 0, scratch));

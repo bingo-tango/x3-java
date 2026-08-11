@@ -9,23 +9,28 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-/**
- * Minimal 16-bit little-endian PCM WAV reader/writer for conversion utilities.
- * Not a general audio I/O library — only what {@link X3Files} needs.
- */
+/// Minimal 16-bit little-endian PCM WAV reader/writer for conversion utilities.
+///
+/// Not a general audio I/O library — only what [X3Files] needs to round-trip `.wav`
+/// against the X3 codec.
 public final class WavPcm {
 
     private static final int WRITE_SLAB_SAMPLES = 32 * 1024; // 64 KiB LE bytes
 
+    /// Decoded WAV contents plus the format fields needed to re-encode or re-write them.
     public static final class WavData {
+        /// Sample rate in Hz, from the `fmt ` chunk.
         public final int sampleRate;
+        /// Channel count, from the `fmt ` chunk.
         public final int channels;
+        /// Bits per sample, from the `fmt ` chunk; always 16 (the only format supported).
         public final int bitsPerSample;
-        /** Interleaved signed PCM samples. */
+        /// Interleaved signed PCM samples.
         public final short[] samples;
-        /** Number of frames (= samples.length / channels). */
+        /// Number of frames (= samples.length / channels).
         public final int frames;
 
+        /// @param samples interleaved; `frames` is derived as `samples.length / channels`
         public WavData(int sampleRate, int channels, int bitsPerSample, short[] samples) {
             this.sampleRate = sampleRate;
             this.channels = channels;
@@ -38,6 +43,9 @@ public final class WavPcm {
     private WavPcm() {
     }
 
+    /// Reads a 16-bit PCM `.wav`.
+    ///
+    /// @throws IOException if the file isn't RIFF/WAVE, isn't 16-bit PCM, or has no `data` chunk
     public static WavData read(Path path) throws IOException {
         byte[] all = Files.readAllBytes(path);
         if (all.length < 44) {
@@ -108,10 +116,8 @@ public final class WavPcm {
         return new WavData(sampleRate, channels, bitsPerSample, samples);
     }
 
-    /**
-     * Write a 16-bit LE PCM WAV. Streams sample data in fixed slabs so peak heap
-     * is header + one slab rather than a second full-size PCM byte image.
-     */
+    /// Writes a 16-bit LE PCM WAV, streaming sample data in fixed slabs so peak heap
+    /// is header + one slab rather than a second full-size PCM byte image.
     public static void write(Path path, int sampleRate, int channels, short[] interleaved) throws IOException {
         if (channels < 1) {
             throw new IllegalArgumentException("channels must be >= 1");

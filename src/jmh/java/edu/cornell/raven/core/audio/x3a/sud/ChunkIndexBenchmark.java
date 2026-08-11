@@ -20,6 +20,8 @@ import java.lang.foreign.ValueLayout;
 import java.nio.ByteOrder;
 import java.util.concurrent.TimeUnit;
 
+/// Measures [ChunkIndex#build] cost over a synthetic multi-chunk record stream, since
+/// it runs once per file open and its cost scales with chunk count.
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
 @Warmup(iterations = 1, time = 1)
@@ -61,6 +63,7 @@ public class ChunkIndexBenchmark {
         arena.close();
     }
 
+    /// Full index build over the synthetic fixture.
     @Benchmark
     public void buildIndex(Blackhole blackhole) {
         index.build(mappedFile, SAMPLE_RATE);

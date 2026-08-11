@@ -17,15 +17,13 @@ import java.util.concurrent.Semaphore;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * Simple {@code .wav} ↔ {@code .x3a} file conversion for tests and upstream tooling.
- * <p>
- * Pure Java (no libsndfile). Archive layout matches the public X3 archive format
- * (x3-rust / x3new.m): {@code X3ARCHIV} + XML config frame + data frames.
- */
+/// Simple `.wav` ↔ `.x3a` file conversion for tests and upstream tooling.
+///
+/// Pure Java, no libsndfile. Archive layout matches the public X3 archive format
+/// (x3-rust / x3new.m): `X3ARCHIV` + XML config frame + data frames.
 public final class X3Files {
 
-    /** Below this many data frames, parallel fan-out is skipped (matches {@link ChunkPipeline}). */
+    /// Below this many data frames, parallel fan-out is skipped (matches [ChunkPipeline]).
     private static final int PARALLEL_FRAME_FLOOR = 2;
 
     private static final Pattern FS = Pattern.compile("<FS[^>]*>(\\d+)</FS>", Pattern.CASE_INSENSITIVE);
@@ -37,17 +35,12 @@ public final class X3Files {
     private X3Files() {
     }
 
-    /**
-     * Convert a 16-bit PCM WAV file to an X3 archive ({@code .x3a}).
-     * Overwrites {@code x3aPath} if it exists.
-     */
+    /// Converts a 16-bit PCM WAV file to an X3 archive (`.x3a`). Overwrites `x3aPath` if it exists.
     public static void wavToX3a(Path wavPath, Path x3aPath) throws IOException {
         wav_to_x3a(wavPath, x3aPath);
     }
 
-    /**
-     * Snake_case alias matching the x3-rust API name.
-     */
+    /// Snake_case alias matching the x3-rust API name.
     public static void wav_to_x3a(Path wavPath, Path x3aPath) throws IOException {
         WavPcm.WavData wav = WavPcm.read(wavPath);
         X3AudioEncoder encoder = new X3AudioEncoder();
@@ -60,26 +53,19 @@ public final class X3Files {
         Files.write(x3aPath, archive);
     }
 
-    /**
-     * Convert an X3 archive ({@code .x3a}) to a 16-bit PCM WAV file.
-     * Overwrites {@code wavPath} if it exists.
-     */
+    /// Converts an X3 archive (`.x3a`) to a 16-bit PCM WAV file. Overwrites `wavPath` if it exists.
     public static void x3aToWav(Path x3aPath, Path wavPath) throws IOException {
         x3a_to_wav(x3aPath, wavPath);
     }
 
-    /**
-     * Snake_case alias matching the x3-rust API name.
-     */
+    /// Snake_case alias matching the x3-rust API name.
     public static void x3a_to_wav(Path x3aPath, Path wavPath) throws IOException {
         byte[] all = Files.readAllBytes(x3aPath);
         DecodedArchive dec = decodeArchive(all);
         WavPcm.write(wavPath, dec.sampleRate, dec.channels, dec.pcm);
     }
 
-    /**
-     * Build a complete {@code .x3a} byte image from interleaved PCM.
-     */
+    /// Builds a complete `.x3a` byte image from interleaved PCM.
     public static byte[] encodeArchive(short[] pcm, int frames, int channels, int sampleRate,
                                        X3AudioEncoder encoder) {
         if (frames <= 0) {
@@ -123,23 +109,19 @@ public final class X3Files {
         return out.toByteArray();
     }
 
-    /**
-     * Decode a full archive image to interleaved PCM + stream metadata, using
-     * {@link DecodeOptions#defaults()} for frame-decode concurrency.
-     */
+    /// Decodes a full archive image to interleaved PCM + stream metadata, using
+    /// [DecodeOptions#defaults()] for frame-decode concurrency.
     public static DecodedArchive decodeArchive(byte[] archive) {
         return decodeArchive(archive, DecodeOptions.defaults());
     }
 
-    /**
-     * Decode a full archive image to interleaved PCM + stream metadata.
-     * <p>
-     * Single pre-sized PCM buffer; frame payloads are zero-copy slices of the archive
-     * array (no per-frame arena or chunk list). Data frames are independent (each stores
-     * its own filter state), so above {@code options.maxConcurrency() > 1} they decode in
-     * parallel on virtual threads, gated by a local + optional shared {@link Semaphore}
-     * (mirrors {@link ChunkPipeline#decodeWindowInt}).
-     */
+    /// Decodes a full archive image to interleaved PCM + stream metadata.
+    ///
+    /// Uses a single pre-sized PCM buffer; frame payloads are zero-copy slices of the
+    /// archive array, avoiding a per-frame arena or chunk list. Data frames are
+    /// independent (each carries its own filter state), so above
+    /// `options.maxConcurrency() > 1` they decode in parallel on virtual threads, gated
+    /// by a local + optional shared [Semaphore] (mirrors [ChunkPipeline#decodeWindowInt]).
     public static DecodedArchive decodeArchive(byte[] archive, DecodeOptions options) {
         if (archive.length < X3FrameHeader.ARCHIVE_ID.length + X3FrameHeader.LENGTH) {
             throw new IllegalArgumentException("archive too small");
@@ -292,11 +274,16 @@ public final class X3Files {
         localLimiter.release();
     }
 
+    /// Result of [#decodeArchive(byte[])]: interleaved PCM plus the stream metadata
+    /// recovered from the archive's config frame.
     public static final class DecodedArchive {
+        /// Sample rate in Hz, parsed from the embedded `<FS>` config.
         public final int sampleRate;
+        /// Channel count, taken from the first data frame's header.
         public final int channels;
+        /// Interleaved decoded PCM samples.
         public final short[] pcm;
-        /** Embedded {@code <X3ARCH>}/{@code <CFG>} config XML, recovered verbatim from the archive. */
+        /// Embedded `<X3ARCH>`/`<CFG>` config XML, recovered verbatim from the archive.
         public final String xml;
 
         public DecodedArchive(int sampleRate, int channels, short[] pcm, String xml) {
@@ -306,6 +293,7 @@ public final class X3Files {
             this.xml = xml;
         }
 
+        /// `pcm.length / channels`.
         public int frames() {
             return pcm.length / channels;
         }

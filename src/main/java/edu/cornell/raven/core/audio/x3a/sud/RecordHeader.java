@@ -6,16 +6,12 @@ import java.lang.foreign.ValueLayout;
 import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
 
-/**
- * Shared 20-byte record header framing for every record in a {@code .SUD} file
- * (metadata/event record or binary audio chunk alike). See {@link SudFileMapper}'s
- * class doc for the empirically reverse-engineered field layout.
- *
- * <p>Factored out of {@link SudFileMapper} so {@link ChunkIndex}'s Phase 2 record
- * walk shares this framing instead of re-deriving it, avoiding the kind of drift
- * that broke the {@code X3Decoder --> SudFileMapper} dependency before the Phase 1
- * fix.
- */
+/// Shared 20-byte record header framing for every record in a `.SUD` file
+/// (metadata/event record or binary audio chunk alike). See [SudFileMapper]'s
+/// class doc for the empirically reverse-engineered field layout.
+///
+/// Factored out of [SudFileMapper] so [ChunkIndex]'s record walk shares this
+/// framing instead of re-deriving it and risking drift between the two.
 final class RecordHeader {
 
     static final MemoryLayout LAYOUT = MemoryLayout.structLayout(
@@ -35,13 +31,11 @@ final class RecordHeader {
     private static final byte SYNC_BYTE_0 = 0x52;
     private static final byte SYNC_BYTE_1 = (byte) 0xA9;
 
-    /**
-     * Sentinel value of the header's 3rd short field for metadata/event records.
-     * For every other record it is instead the record's decoded sample count
-     * (always a multiple of {@code BLKLEN=16}) — confirmed by summing this field
-     * across the real fixture and matching OceanInstruments' own reported
-     * {@code SampleCount} exactly. It is not a chunk-type enum.
-     */
+    /// Sentinel value of the header's 3rd short field for metadata/event records.
+    /// For every other record it is instead the record's decoded sample count
+    /// (always a multiple of `BLKLEN=16`) — confirmed by summing this field across
+    /// the real fixture and matching OceanInstruments' own reported `SampleCount`
+    /// exactly. It is not a chunk-type enum.
     static final int METADATA_RECORD_TYPE = 1;
 
     private RecordHeader() {
@@ -56,10 +50,8 @@ final class RecordHeader {
         return Short.toUnsignedInt((short) PAYLOAD_LENGTH.get(segment, pos));
     }
 
-    /**
-     * {@code 1} for metadata/event records; for audio chunks, the decoded sample
-     * count carried in this chunk.
-     */
+    /// `1` for metadata/event records; for audio chunks, the decoded sample count
+    /// carried in this chunk.
     static int sampleCountOrRecordType(MemorySegment segment, long pos) {
         return Short.toUnsignedInt((short) RECORD_TYPE.get(segment, pos));
     }
@@ -68,10 +60,8 @@ final class RecordHeader {
         return sampleCountOrRecordType == METADATA_RECORD_TYPE;
     }
 
-    /**
-     * Scans forward from byte 0 for the first {@code 0x52, 0xA9} sync marker within
-     * {@code limit} bytes, returning {@code -1} if none is found.
-     */
+    /// Scans forward from byte 0 for the first `0x52, 0xA9` sync marker within
+    /// `limit` bytes, returning `-1` if none is found.
     static long findFirstSync(MemorySegment segment, long limit) {
         for (long i = 0; i + 2 <= limit; i++) {
             if (hasSyncAt(segment, i)) {

@@ -18,6 +18,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
+/// Measures [X3Decoder]'s windowed-read overhead in isolation from real file content
+/// (fixture is an all-zero `.sud`), i.e. the pipeline/dispatch cost rather than codec work.
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
 @Warmup(iterations = 1, time = 1)
@@ -48,11 +50,13 @@ public class X3DecoderBenchmark {
         Files.deleteIfExists(sudFile);
     }
 
+    /// Int read path.
     @Benchmark
     public void decodeSamplesInt(Blackhole blackhole) {
         blackhole.consume(decoder.decodeSamplesInt(0L, intDest.length, intDest));
     }
 
+    /// Float read path, including normalization.
     @Benchmark
     public void decodeSamplesFloat(Blackhole blackhole) {
         blackhole.consume(decoder.decodeSamplesFloat(0L, floatDest.length, floatDest));

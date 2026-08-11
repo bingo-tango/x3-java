@@ -31,21 +31,20 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
-/**
- * Paper-suite file conversion benchmark ({@code ./test/*.wav} ↔ {@code .x3a}).
- * <p>
- * Uses {@link Mode#SingleShotTime} because each op is a full file conversion (I/O + codec),
- * not a micro-throughput loop. Warmup/measurement are kept minimal so the suite finishes quickly.
- * <p>
- * Run (CSV summary + JMH scores):
- * <pre>
- *   ./gradlew conversionBenchmark
- * </pre>
- * Or via the generic JMH task:
- * <pre>
- *   ./gradlew jmh -Pjmh.includes=.*ConversionBenchmark.*
- * </pre>
- */
+/// Paper-suite file conversion benchmark (`./test/*.wav` ↔ `.x3a`).
+///
+/// Uses [Mode#SingleShotTime] because each op is a full file conversion (I/O + codec),
+/// not a micro-throughput loop. Warmup/measurement are kept minimal so the suite
+/// finishes quickly.
+///
+/// Run (CSV summary + JMH scores):
+/// ```
+///   ./gradlew conversionBenchmark
+/// ```
+/// Or via the generic JMH task:
+/// ```
+///   ./gradlew jmh -Pjmh.includes=.*ConversionBenchmark.*
+/// ```
 @BenchmarkMode(Mode.SingleShotTime)
 @OutputTimeUnit(TimeUnit.SECONDS)
 @Warmup(iterations = 1)
@@ -55,9 +54,9 @@ public class ConversionBenchmark {
 
     private static final Path TEST_DIR = Path.of("test");
 
-    /** Input WAV size (bytes) by base name, filled during encode trials. */
+    /// Input WAV size (bytes) by base name, filled during encode trials.
     static final ConcurrentHashMap<String, Long> WAV_BYTES = new ConcurrentHashMap<>();
-    /** Compressed .x3a size (bytes) by base name. */
+    /// Compressed .x3a size (bytes) by base name.
     static final ConcurrentHashMap<String, Long> X3A_BYTES = new ConcurrentHashMap<>();
 
     @State(Scope.Thread)
@@ -121,6 +120,7 @@ public class ConversionBenchmark {
         }
     }
 
+    /// Encode side of the round trip.
     @Benchmark
     public long wav_to_x3a(EncodeInput in) throws Exception {
         X3Files.wav_to_x3a(in.wav, in.x3a);
@@ -129,16 +129,15 @@ public class ConversionBenchmark {
         return out;
     }
 
+    /// Decode side of the round trip.
     @Benchmark
     public long x3a_to_wav(DecodeInput in) throws Exception {
         X3Files.x3a_to_wav(in.x3a, in.wavOut);
         return Files.size(in.wavOut);
     }
 
-    /**
-     * Standalone entry: runs this class with minimal single-shot settings and prints
-     * CSV metrics comparable to x3-rust {@code test/bench.sh}.
-     */
+    /// Standalone entry: runs this class with minimal single-shot settings and prints
+    /// CSV metrics comparable to x3-rust `test/bench.sh`.
     public static void main(String[] args) throws Exception {
         WAV_BYTES.clear();
         X3A_BYTES.clear();
@@ -243,7 +242,7 @@ public class ConversionBenchmark {
         return Files.isRegularFile(wav) ? Files.size(wav) : 0L;
     }
 
-    /** Match x3-rust bench.sh: bytes / time / 1024 / 1024 (MiB/s). */
+    /// Match x3-rust bench.sh: bytes / time / 1024 / 1024 (MiB/s).
     private static double mibPerSec(long bytes, double sec) {
         if (sec <= 0) {
             return 0;

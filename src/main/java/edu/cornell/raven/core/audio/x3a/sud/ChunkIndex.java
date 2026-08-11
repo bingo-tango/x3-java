@@ -2,18 +2,22 @@ package edu.cornell.raven.core.audio.x3a.sud;
 
 import java.lang.foreign.MemorySegment;
 
-/**
- * Phase 2: Flattened in-memory index table for fast seeking without {@code .sudx} sidecars.
- * <p>
- * Layout per audio chunk (4 longs):
- * {@code [Sample_Offset, File_Byte_Offset, Chunk_Length, Frame_Timestamp]}.
- */
+/// Flattened in-memory index table for fast random-access seeking without `.sudx`
+/// sidecar files.
+///
+/// Layout per audio chunk (4 longs): `[Sample_Offset, File_Byte_Offset, Chunk_Length,
+/// Frame_Timestamp]`.
 public final class ChunkIndex {
 
+    /// Longs per chunk index entry.
     public static final int STRIDE = 4;
+    /// Index-entry offset of a chunk's starting sample.
     public static final int SAMPLE_OFFSET = 0;
+    /// Index-entry offset of a chunk's starting byte in the mapped file.
     public static final int FILE_BYTE_OFFSET = 1;
+    /// Index-entry offset of a chunk's payload length in bytes.
     public static final int CHUNK_LENGTH = 2;
+    /// Index-entry offset of a chunk's timestamp in nanoseconds.
     public static final int FRAME_TIMESTAMP = 3;
 
     private static final long NANOS_PER_SECOND = 1_000_000_000L;
@@ -22,25 +26,24 @@ public final class ChunkIndex {
     private int chunkCount;
     private long totalSamples;
 
+    /// Empty index; populate via [#build].
     public ChunkIndex() {
         this.table = new long[0];
         this.chunkCount = 0;
         this.totalSamples = 0L;
     }
 
-    /**
-     * Single-pass scan that walks every record via the shared {@link RecordHeader}
-     * framing, skipping metadata/event records (including the trailing
-     * end-of-session one) and indexing everything else as an audio chunk. Each
-     * chunk's own header field is its decoded sample count (see
-     * {@link RecordHeader#sampleCountOrRecordType}), so {@code Sample_Offset} and
-     * {@code Frame_Timestamp} are exact, not approximated from compressed byte
-     * length.
-     *
-     * @param mappedFile zero-copy mapped {@code .SUD} file
-     * @param sampleRate decoded audio sample rate (Hz), used to convert cumulative
-     *                   sample counts into {@code Frame_Timestamp} nanoseconds
-     */
+    /// Single-pass scan walking every record via the shared [RecordHeader] framing,
+    /// skipping metadata/event records (including the trailing end-of-session one) and
+    /// indexing everything else as an audio chunk.
+    ///
+    /// Each chunk's own header field is its decoded sample count (see
+    /// [RecordHeader#sampleCountOrRecordType]), so `Sample_Offset` and `Frame_Timestamp`
+    /// come out exact rather than approximated from compressed byte length.
+    ///
+    /// @param mappedFile zero-copy mapped `.SUD` file
+    /// @param sampleRate decoded audio sample rate (Hz), used to convert cumulative
+    ///                   sample counts into `Frame_Timestamp` nanoseconds
     public void build(MemorySegment mappedFile, int sampleRate) {
         long fileSize = mappedFile.byteSize();
         long searchLimit = Math.min(fileSize, SudFileMapper.SYNC_SEARCH_WINDOW);
@@ -87,26 +90,23 @@ public final class ChunkIndex {
         System.arraycopy(working, 0, this.table, 0, this.table.length);
     }
 
+    /// Number of indexed audio chunks.
     public int chunkCount() {
         return chunkCount;
     }
 
-    /**
-     * Total decoded sample count across every indexed audio chunk.
-     */
+    /// Total decoded sample count across every indexed audio chunk.
     public long totalSamples() {
         return totalSamples;
     }
 
+    /// Raw flattened index table; see the class doc for its per-chunk layout.
     public long[] table() {
         return table;
     }
 
-    /**
-     * Upper-bound binary search over sample offsets. Returns the index of the
-     * chunk containing {@code sample}, or {@code -1} if {@code sample} is negative
-     * or beyond {@link #totalSamples()}.
-     */
+    /// Upper-bound binary search over sample offsets. Returns the index of the chunk
+    /// containing `sample`, or `-1` if `sample` is negative or beyond [#totalSamples()].
     public int findChunkBySample(long sample) {
         if (chunkCount == 0 || sample < 0 || sample >= totalSamples) {
             return -1;
@@ -124,18 +124,22 @@ public final class ChunkIndex {
         return lo;
     }
 
+    /// Starting sample of the given chunk.
     public long sampleOffset(int chunkIndex) {
         return table[chunkIndex * STRIDE + SAMPLE_OFFSET];
     }
 
+    /// Starting byte of the given chunk in the mapped file.
     public long fileByteOffset(int chunkIndex) {
         return table[chunkIndex * STRIDE + FILE_BYTE_OFFSET];
     }
 
+    /// Payload length in bytes of the given chunk.
     public long chunkLength(int chunkIndex) {
         return table[chunkIndex * STRIDE + CHUNK_LENGTH];
     }
 
+    /// Timestamp in nanoseconds of the given chunk.
     public long frameTimestamp(int chunkIndex) {
         return table[chunkIndex * STRIDE + FRAME_TIMESTAMP];
     }

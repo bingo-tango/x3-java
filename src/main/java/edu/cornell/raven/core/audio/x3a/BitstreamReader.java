@@ -3,43 +3,44 @@ package edu.cornell.raven.core.audio.x3a;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
-/**
- * Phase 3: Variable-bit-length reader over a payload slice.
- * Tracks bit cursors in primitive registers for JIT-friendly unpacking.
- * <p>
- * Bits are consumed MSB-first within each byte (X3 / SoundTrap convention).
- * When {@code swapBytePairs} is enabled, physical bytes are read as
- * {@code index ^ 1} so little-endian on-disk 16-bit words become the big-endian
- * stream the codec expects (same pair-swap PAMGuard applies before X3 unpack).
- * <p>
- * Hot path matches x3-rust: a left-aligned 32-bit window refilled 4 bytes at a
- * time, with {@link Integer#numberOfLeadingZeros(int)} for rice unary runs.
- * Prefer the {@code byte[]} constructors for heap archives (no FFM call per byte);
- * {@link MemorySegment} is for mmap SUD payloads.
- */
+/// MSB-first variable-bit reader over an X3 payload, shared by the SUD and archive
+/// decode paths.
+///
+/// When `swapBytePairs` is set, physical bytes are read pair-swapped (`index ^ 1`) so
+/// little-endian on-disk 16-bit words become the big-endian stream the codec expects —
+/// the same swap PAMGuard applies before X3 unpack.
+///
+/// Tracks the cursor as a left-aligned 32-bit window refilled 4 bytes at a time rather
+/// than bit-by-bit, so [Integer#numberOfLeadingZeros(int)] can measure a rice unary run
+/// without looping. Prefer the `byte[]` constructors for heap archives (no FFM call per
+/// byte); [MemorySegment] is for mmap SUD payloads.
 public final class BitstreamReader {
 
     private static final int BIT_LEN = 32;
     private static final int BYTES_PER_WORD = 4;
 
-    /** Heap payload (preferred for .x3a); null when using {@link #seg}. */
+    /// Heap payload (preferred for `.x3a`); null when using [#seg].
     private final byte[] heap;
     private final int heapBase;
     private final MemorySegment seg;
     private final long byteLength;
     private final boolean swapBytePairs;
 
-    /** Next logical byte index to load into the window. */
+    /// Next logical byte index to load into the window.
     private long bytePos;
-    /** Left-aligned bit window (valid bits in the high {@link #remBit} positions). */
+    /// Left-aligned bit window (valid bits in the high [#remBit] positions).
     private int leadingWord;
-    /** Number of valid bits remaining in {@link #leadingWord}. */
+    /// Number of valid bits remaining in [#leadingWord].
     private int remBit;
 
+    /// Reads a mapped SUD/archive payload with no byte-pair swap.
     public BitstreamReader(MemorySegment payload) {
         this(payload, false);
     }
 
+    /// Reads a mapped payload, optionally undoing SUD's byte-pair swap.
+    ///
+    /// @param swapBytePairs true for SUD payloads, whose on-disk 16-bit words are byte-pair swapped
     public BitstreamReader(MemorySegment payload, boolean swapBytePairs) {
         this.heap = null;
         this.heapBase = 0;
@@ -50,9 +51,8 @@ public final class BitstreamReader {
         loadNextWord();
     }
 
-    /**
-     * Zero-copy reader over a heap byte range (fast path for archive frame bodies).
-     */
+    /// Zero-copy reader over a heap byte range — the fast path for archive frame bodies,
+    /// avoiding an FFM call per byte.
     public BitstreamReader(byte[] payload, int offset, int length, boolean swapBytePairs) {
         if (payload == null) {
             throw new NullPointerException("payload");
@@ -69,13 +69,12 @@ public final class BitstreamReader {
         loadNextWord();
     }
 
+    /// Convenience for a whole-array payload; see [#BitstreamReader(byte[],int,int,boolean)].
     public BitstreamReader(byte[] payload, boolean swapBytePairs) {
         this(payload, 0, payload.length, swapBytePairs);
     }
 
-    /**
-     * Reads {@code width} bits (1..32) as an unsigned value in the low bits of the result.
-     */
+    /// Reads `width` bits (1..32) as an unsigned value in the low bits of the result.
     public int readBits(int width) {
         if (width <= 0 || width > 32) {
             throw new IllegalArgumentException("width must be in 1..32");
@@ -96,10 +95,8 @@ public final class BitstreamReader {
         return result;
     }
 
-    /**
-     * Counts and consumes consecutive zero bits (does not consume the terminating one-bit).
-     * Spans multiple 32-bit windows when needed (rice unary runs).
-     */
+    /// Counts and consumes the unary prefix of a rice code — consecutive zero bits, not
+    /// including the terminating one-bit — spanning multiple 32-bit windows if needed.
     public int countZeroBits() {
         if (remBit == 0 && bytePos >= byteLength) {
             throw underrun(1);
@@ -124,16 +121,20 @@ public final class BitstreamReader {
         }
     }
 
+    /// True while any bits remain, buffered or unread.
     public boolean hasRemaining() {
         return remBit > 0 || bytePos < byteLength;
     }
 
+    /// Byte offset of the next unread bit, correcting for bits already loaded into the
+    /// window but not yet consumed — lets callers report a decode cursor mid-window.
     public long bytePosition() {
         long loaded = bytePos;
         int unusedBytesInWindow = remBit >> 3;
         return loaded - unusedBytesInWindow - ((remBit & 7) != 0 ? 1 : 0);
     }
 
+    /// Bits currently buffered in the window; exposed for tests exercising window refill.
     public int bitsBuffered() {
         return remBit;
     }

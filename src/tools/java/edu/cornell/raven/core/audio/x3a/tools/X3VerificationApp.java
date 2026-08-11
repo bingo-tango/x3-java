@@ -23,20 +23,19 @@ import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/**
- * Phase 6: minimal drag-and-drop verification app — drop a {@code .SUD} or
- * {@code .x3a} file, get a {@code .wav} (plus a {@code .xml} metadata sidecar
- * when recovered metadata is available) next to it.
- * <p>
- * Test scaffolding, not library code (development-plan.md Phase 6 / §1 scope
- * boundary): no file chooser, no settings, no playback, no batch queue.
- */
+/// Minimal drag-and-drop verification app — drop a `.SUD` or `.x3a` file, get a
+/// `.wav` (plus a `.xml` metadata sidecar when recovered metadata is available)
+/// next to it.
+///
+/// Test scaffolding, not library code: no file chooser, no settings, no playback,
+/// no batch queue.
 public final class X3VerificationApp extends Application {
 
     private static final int WINDOW_FRAMES = 65536;
 
     private final ExecutorService conversions = Executors.newVirtualThreadPerTaskExecutor();
 
+    /// Builds the single-drop-zone scene.
     @Override
     public void start(Stage stage) {
         Label status = new Label("Drop a .SUD or .x3a file");
@@ -53,6 +52,7 @@ public final class X3VerificationApp extends Application {
         stage.show();
     }
 
+    /// Stops accepting new conversions; in-flight ones still finish.
     @Override
     public void stop() {
         conversions.shutdown();
@@ -174,6 +174,7 @@ public final class X3VerificationApp extends Application {
         return parent == null ? Path.of(newName) : parent.resolve(newName);
     }
 
+    /// Launches the JavaFX app.
     public static void main(String[] args) {
         launch(args);
     }

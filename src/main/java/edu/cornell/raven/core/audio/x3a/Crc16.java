@@ -1,9 +1,7 @@
 package edu.cornell.raven.core.audio.x3a;
 
-/**
- * CRC-16 used by the X3 archive frame header and payload (same table as x3-rust / x3new.m).
- * Polynomial reflected table for the classic {@code 0x1021} XMODEM/CCITT update.
- */
+/// CRC-16 (XMODEM/CCITT, poly `0x1021`) matching x3-rust / x3new.m, so archive and frame
+/// checksums produced here validate against the reference tooling.
 public final class Crc16 {
 
     private static final int[] TABLE = {
@@ -31,18 +29,22 @@ public final class Crc16 {
     private Crc16() {
     }
 
-    /** Initial CRC value for a fresh stream. */
+    /// Initial CRC value for a fresh stream.
     public static final int INIT = 0xffff;
 
+    /// Folds one byte into a running CRC; exposed so callers can checksum a stream
+    /// incrementally instead of buffering it first (see [BitstreamWriter#crc()]).
     public static int update(int crc, int dataByte) {
         int lookup = (dataByte ^ (crc >>> 8)) & 0xff;
         return ((crc << 8) ^ TABLE[lookup]) & 0xffff;
     }
 
+    /// CRC of the whole array, from [#INIT].
     public static int crc(byte[] data) {
         return crc(data, 0, data.length);
     }
 
+    /// CRC of a sub-range, from [#INIT] — avoids copying a slice just to checksum it.
     public static int crc(byte[] data, int off, int len) {
         int c = INIT;
         for (int i = 0; i < len; i++) {

@@ -18,6 +18,8 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.util.concurrent.TimeUnit;
 
+/// Measures [BitstreamReader]'s raw bit-unpacking throughput, isolated from the codec's
+/// Rice/BFP decode logic, to catch regressions in the bit-level hot path specifically.
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)
 @Warmup(iterations = 1, time = 1)
@@ -41,6 +43,7 @@ public class BitstreamReaderBenchmark {
         arena.close();
     }
 
+    /// Repeated small (4-bit) reads until the buffer is exhausted.
     @Benchmark
     public void readNibbles(Blackhole blackhole) {
         BitstreamReader reader = new BitstreamReader(payload);

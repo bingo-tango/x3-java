@@ -29,7 +29,6 @@ Upstream consumes **PCM sample windows + metadata** this library exposes; it doe
 
 ### Build tooling
 * Gradle 9.3.1 (with wrapper) for build and dependencies.
-* Gradle plugins for jlink so custom runtime images can be produced when needed.
 * JMH under `src/jmh/java` for decoder microbenchmarks.
 
 ### Agent coding rules
@@ -42,10 +41,10 @@ Performance and allocation rules for implementers live in **[`AGENTS.md`](AGENTS
 | Area | Package                                | Types (representative) |
 | :--- |:---------------------------------------| :--- |
 | Codec / pipeline | `edu.cornell.raven.core.audio.x3a`     | `BitstreamReader`, `X3AudioDecoder`, `ChunkPipeline` |
-| SUD container | `edu.cornell.raven.core.audio.x3a.sud` | `SudFileMapper`, `ChunkType`, `ChunkIndex`, `FileMetadata`, `TelemetryCallback`, facade `X3Decoder` |
+| SUD container | `edu.cornell.raven.core.audio.x3a.sud` | `SudFileMapper`, `ChunkIndex`, `FileMetadata`, `TelemetryCallback`, facade `X3Decoder` |
 
 **JPMS module:** `edu.cornell.raven.core.audio.x3a` (the `a` suffix avoids javac's `-Xlint:module` terminal-digits warning; package names are unaffected)  
-**Exports:** `edu.cornell.raven.core.audio.x3`, `edu.cornell.raven.core.audio.x3.sud`
+**Exports:** `edu.cornell.raven.core.audio.x3a`, `edu.cornell.raven.core.audio.x3a.sud`
 
 Dependency direction is one-way: **`.sud` → core `x3a`**. Codec types must not depend on container types so upstream can use pure decode APIs without implying SUD-only use.
 
@@ -105,7 +104,7 @@ A `.SUD` file is a sequential container of framed binary chunks. The decoder mus
 
 ### Phase 2: In-Memory Index Table Generator (Fast Seeking)
 * **Objective:** Allow rapid random access without building `.sudx` sidecar files on disk.
-* **Package:** `...audio.x3a.sud` (`ChunkIndex`, `ChunkType`).
+* **Package:** `...audio.x3a.sud` (`ChunkIndex`).
 * **Implementation:**
   * Build a single-pass, ultra-fast initialization path that skips across chunk payloads using chunk size headers.
   * Cache layout data in a flattened primitive array: `long[] indexTable`.
@@ -114,7 +113,7 @@ A `.SUD` file is a sequential container of framed binary chunks. The decoder mus
 
 ### Phase 3: JIT-Friendly Audio & Bitstream Unpacking
 * **Objective:** Structure predictive coding loops to guarantee HotSpot auto-vectorization across dual primitive types.
-* **Package:** `...audio.x3` (`BitstreamReader`, `X3AudioDecoder`).
+* **Package:** `...audio.x3a` (`BitstreamReader`, `X3AudioDecoder`).
 * **Implementation:**
   * Track variable-bit streaming pointers inside primitive `int` registers using bitwise operators (`<<`, `>>`, `&`).
   * **Flatten all multi-channel audio tracks** into a single pre-allocated, flat 1D array (`int[]` or `short[]`) to maximize hardware cache locality.
@@ -125,7 +124,7 @@ A `.SUD` file is a sequential container of framed binary chunks. The decoder mus
 
 ### Phase 4: Threaded Parallel Processing Chunk Pipeline
 * **Objective:** Scale decoder processing throughput linearly across available CPU threads.
-* **Package:** `...audio.x3` (`ChunkPipeline`); facade orchestration in `...audio.x3a.sud` (`X3Decoder`).
+* **Package:** `...audio.x3a` (`ChunkPipeline`); facade orchestration in `...audio.x3a.sud` (`X3Decoder`).
 * **Implementation:**
   * Divide the master file-mapped `MemorySegment` into isolated block slices based on the index table.
   * Distribute **stateless** audio decoding chunks across virtual worker threads using `StructuredTaskScope`.
@@ -168,8 +167,7 @@ Do **not** add `LibsndfileWriter` or equivalent types under `src/` in this repos
 * **Build integration (single-project build — no subprojects exist today):**
   * Add a `tools` source set at `src/tools/java` with `main` output on its compile/runtime classpath. Keeps JavaFX out of `main`'s dependencies and out of `module-info.java`.
   * Apply `org.openjfx.javafxplugin` with the `javafx.controls` module only (no FXML, media, web), scoped to the `tools` configurations.
-  * Register a `runTestApp` `JavaExec` task rather than repointing `application.mainClass` — the existing `application`/`jlink` setup keeps `X3Decoder` as the `x3decoder` launcher.
-  * Optional: a second `jlink` launcher for the GUI if a double-clickable build is ever needed for testers. Not required for local verification.
+  * Register a `runTestApp` `JavaExec` task for the GUI rather than adding an `application` plugin entry point — `X3Decoder` is a library facade, not a CLI, so no `application`/`jlink` launcher exists.
 * **Test assets:** `src/test/resources/` already holds `EH120_15s.wav`, `LI192_15s.wav`, `PI240_15s.wav` — useful as reference output for byte-comparing the harness's WAV against known-good decodes once real `.SUD` / `.x3a` inputs are on hand.
 
 ---

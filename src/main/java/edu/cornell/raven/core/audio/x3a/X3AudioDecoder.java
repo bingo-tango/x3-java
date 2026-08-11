@@ -2,23 +2,21 @@ package edu.cornell.raven.core.audio.x3a;
 
 import java.lang.foreign.MemorySegment;
 
-/**
- * Phase 3: JIT-friendly X3 predictive audio unpacking into flattened 1D PCM buffers.
- * Multi-channel output is interleaved in a single primitive array (no {@code short[][]}).
- * <p>
- * Implements X3V2 block coding (RICE0 / RICE1 / RICE3 / BFP) with the diff predictor,
- * matching the Johnson et al. codec and the PAMGuard / x3-rust reference decoders.
- * SoundTrap {@code .SUD} payloads must be read with pair-wise endian swap
- * ({@code sudPayload=true}); bare {@code .x3a} frame bodies use {@code sudPayload=false}.
- * <p>
- * Rice and BFP paths fuse residual unpack with integrate (single pass), and rice
- * orders 0/1/3 use specialized loops like x3-rust.
- */
+/// Unpacks X3V2 predictive audio (RICE0/1/3 + BFP block coding, diff filter) into a
+/// flattened, interleaved PCM buffer — matching the Johnson et al. codec and the
+/// PAMGuard / x3-rust reference decoders bit-for-bit.
+///
+/// Output is a single interleaved `short[]` (no `short[][]`) so multi-channel decode
+/// stays allocation-free. SoundTrap `.SUD` payloads need the pair-wise endian swap
+/// (`sudPayload=true`); bare `.x3a` frame bodies don't (`sudPayload=false`).
+///
+/// Rice and BFP paths fuse residual unpack with diff-integrate in one pass, with
+/// specialized loops for orders 0/1/3 (the common case) mirroring x3-rust.
 public final class X3AudioDecoder {
 
     private static final float SCALE_TO_UNIT = 1.0f / 32768.0f;
 
-    /** Inverse Rice residual table: 0, -1, 1, -2, 2, ... (large enough for pathological runs). */
+    /// Inverse Rice residual table: 0, -1, 1, -2, 2, ... (large enough for pathological runs).
     private static final short[] INV_RICE = makeInverseRice(256);
 
     private static final int MAX_CHANNELS = 8;
@@ -27,13 +25,15 @@ public final class X3AudioDecoder {
     private final int blockLen;
     private final int[] riceOrders;
 
-    /** Scratch for one channel's block residuals (reused; no per-block alloc). */
+    /// Scratch for one channel's block residuals (reused; no per-block alloc).
     private final short[] blockScratch = new short[MAX_BLOCK_LEN];
 
+    /// SoundTrap defaults: 16-sample blocks, rice orders `{0, 1, 3}`.
     public X3AudioDecoder() {
         this(16, new int[] {0, 1, 3});
     }
 
+    /// @param riceOrders exactly 3 orders, matching the archive's `<CODES>` config
     public X3AudioDecoder(int blockLen, int[] riceOrders) {
         if (blockLen <= 0 || blockLen > MAX_BLOCK_LEN) {
             throw new IllegalArgumentException("blockLen must be in 1.." + MAX_BLOCK_LEN);
@@ -45,37 +45,33 @@ public final class X3AudioDecoder {
         this.riceOrders = new int[] {riceOrders[0], riceOrders[1], riceOrders[2]};
     }
 
+    /// Block length this decoder was configured with; must match the encoder's.
     public int blockLen() {
         return blockLen;
     }
 
-    /**
-     * Stateless copy for parallel chunk tasks (each task needs its own block scratch).
-     */
+    /// Stateless copy for parallel chunk tasks — each task needs its own [#blockScratch]
+    /// so concurrent decodes don't clobber each other's residual buffer.
     public X3AudioDecoder newInstance() {
         return new X3AudioDecoder(blockLen, riceOrders);
     }
 
-    /**
-     * Decodes one acoustic chunk / frame payload into a caller-owned interleaved {@code short[]} buffer.
-     *
-     * @param payload     compressed X3 payload (filter state + blocks)
-     * @param sampleCount number of PCM frames in this chunk (from SUD header or X3 frame header)
-     * @param channels    channel count
-     * @param dest        interleaved destination
-     * @param destOffset  start index in {@code dest}
-     * @param sudPayload  {@code true} to apply SUD pair-wise byte swap while reading
-     * @return number of PCM frames written
-     */
+    /// Decodes one acoustic chunk / frame payload into a caller-owned interleaved buffer.
+    ///
+    /// @param payload     compressed X3 payload (filter state + blocks)
+    /// @param sampleCount number of PCM frames in this chunk (from SUD header or X3 frame header)
+    /// @param channels    channel count
+    /// @param dest        interleaved destination
+    /// @param destOffset  start index in `dest`
+    /// @param sudPayload  true to apply SUD pair-wise byte swap while reading
+    /// @return number of PCM frames written
     public int decodeChunkInt(MemorySegment payload, int sampleCount, int channels,
                               short[] dest, int destOffset, boolean sudPayload) {
         return decodeChunkInt(new BitstreamReader(payload, sudPayload),
                 sampleCount, channels, dest, destOffset);
     }
 
-    /**
-     * Heap-payload overload for archive frames (avoids per-byte {@link MemorySegment} access).
-     */
+    /// Heap-payload overload for archive frames, avoiding a per-byte [MemorySegment] call.
     public int decodeChunkInt(byte[] payload, int offset, int length, int sampleCount, int channels,
                               short[] dest, int destOffset, boolean sudPayload) {
         return decodeChunkInt(new BitstreamReader(payload, offset, length, sudPayload),
@@ -125,18 +121,14 @@ public final class X3AudioDecoder {
         return sampleCount;
     }
 
-    /**
-     * Convenience: SUD payload (pair-swap on).
-     */
+    /// Convenience: SUD payload (pair-swap on).
     public int decodeChunkInt(MemorySegment payload, int sampleCount, int channels,
                               short[] dest, int destOffset) {
         return decodeChunkInt(payload, sampleCount, channels, dest, destOffset, true);
     }
 
-    /**
-     * Decodes and normalizes samples into a caller-owned {@code float[]} in {@code [-1, 1]}.
-     * Uses a pure countable multiply loop for HotSpot auto-vectorization.
-     */
+    /// Decodes and normalizes into a caller-owned `float[]` in `[-1, 1]`, via `scratch` as
+    /// an intermediate — a pure countable multiply loop HotSpot can auto-vectorize.
     public int decodeChunkFloat(MemorySegment payload, int sampleCount, int channels,
                                 float[] dest, int destOffset, short[] scratch, boolean sudPayload) {
         int frames = decodeChunkInt(payload, sampleCount, channels, scratch, 0, sudPayload);
@@ -147,15 +139,14 @@ public final class X3AudioDecoder {
         return frames;
     }
 
+    /// Convenience: SUD payload (pair-swap on); see [#decodeChunkFloat(MemorySegment,int,int,float[],int,short[],boolean)].
     public int decodeChunkFloat(MemorySegment payload, int sampleCount, int channels,
                                 float[] dest, int destOffset, short[] scratch) {
         return decodeChunkFloat(payload, sampleCount, channels, dest, destOffset, scratch, true);
     }
 
-    /**
-     * Decodes one coded block into {@code out[0..n)}, returning the actual sample count written
-     * (may be smaller than {@code n} for SoundTrap short blocks).
-     */
+    /// Decodes one coded block into `out[0..n)`, returning the actual sample count written
+    /// — may be smaller than `n`, since SoundTrap can shrink a block via a short-block header.
     private int decodeBlock(BitstreamReader br, short[] out, int n, short last) {
         int code = br.readBits(2);
         int nb = 0;
@@ -195,7 +186,7 @@ public final class X3AudioDecoder {
         return n;
     }
 
-    /** RICE order-0: unary only (stop bit, no suffix); fuse integrate. */
+    /// RICE order-0: unary only (stop bit, no suffix); fuse integrate.
     private static void unpackRice0Integrate(BitstreamReader br, short[] out, int n, short last) {
         int acc = last;
         final short[] inv = INV_RICE;
@@ -211,7 +202,7 @@ public final class X3AudioDecoder {
         }
     }
 
-    /** RICE order-1: stop+1 suffix bit read together; fuse integrate. */
+    /// RICE order-1: stop+1 suffix bit read together; fuse integrate.
     private static void unpackRice1Integrate(BitstreamReader br, short[] out, int n, short last) {
         int acc = last;
         final short[] inv = INV_RICE;
@@ -229,7 +220,7 @@ public final class X3AudioDecoder {
         }
     }
 
-    /** RICE order-3: stop+3 suffix bits read together; fuse integrate. */
+    /// RICE order-3: stop+3 suffix bits read together; fuse integrate.
     private static void unpackRice3Integrate(BitstreamReader br, short[] out, int n, short last) {
         int acc = last;
         final short[] inv = INV_RICE;
@@ -246,7 +237,7 @@ public final class X3AudioDecoder {
         }
     }
 
-    /** Generic rice order with fused integrate (fallback for non-standard orders). */
+    /// Generic rice order with fused integrate (fallback for non-standard orders).
     private static void unpackRiceIntegrate(BitstreamReader br, short[] out, int n, short last, int riceOrder) {
         int acc = last;
         final short[] inv = INV_RICE;
@@ -265,7 +256,7 @@ public final class X3AudioDecoder {
         }
     }
 
-    /** BFP / pass-through with fused integrate when {@code nb != 16}. */
+    /// BFP / pass-through with fused integrate when `nb != 16`.
     private static void unpackBfpIntegrate(BitstreamReader br, short[] out, int n, int nb, short last) {
         if (nb <= 0 || nb > 16) {
             throw new IllegalStateException("invalid BFP width: " + nb);
@@ -287,14 +278,14 @@ public final class X3AudioDecoder {
         }
     }
 
-    /** Two's-complement adjust for a {@code nbits}-wide unsigned field. */
+    /// Two's-complement adjust for an `nbits`-wide unsigned field.
     static short fixSign(int d, int nbits) {
         int half = 1 << (nbits - 1);
         int offs = half << 1;
         return (short) (d >= half ? d - offs : d);
     }
 
-    /** Diff-filter inverse: running sum starting from {@code last}. */
+    /// Diff-filter inverse: running sum starting from `last`.
     static void integrate(short[] op, int count, short last) {
         int acc = last;
         for (int k = 0; k < count; k++) {

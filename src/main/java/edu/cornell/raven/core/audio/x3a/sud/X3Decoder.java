@@ -9,35 +9,39 @@ import java.nio.file.Path;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/// Facade tying together `.SUD` file mapping, chunk indexing, and X3 decode into a
+/// single random-access handle for one file.
+///
+/// Construction eagerly maps the file and builds the chunk index so [#decodeSamplesInt]
+/// / [#decodeSamplesFloat] can seek and decode without further I/O setup cost.
 public class X3Decoder implements AutoCloseable {
 
     private static final float SCALE_TO_UNIT = 1.0f / 32768.0f;
     private static final Pattern BLKLEN = Pattern.compile("<BLKLEN>\\s*(\\d+)\\s*</BLKLEN>");
 
-    // Phase 1: Zero-copy mapping + metadata ingestion (converged here per the facade's
-    // FAC --> MAP dependency in the architecture diagram, rather than duplicating it).
     private final SudFileMapper mapper;
     private final MemorySegment mappedFile;
 
-    // Config metadata extracted from Phase 1 (sample rate, channels, bit depth, device tags)
     private final FileMetadata metadata;
 
-    // Phase 2: Flattened in-memory index table (see ChunkIndex for column layout)
     private final ChunkIndex chunkIndex;
 
-    // Phase 3–4: codec + virtual-thread chunk pipeline
     private final X3AudioDecoder audioDecoder;
     private final ChunkPipeline pipeline;
     private final DecodeOptions options;
     private final int channels;
 
-    /** Reusable int→float scratch for {@link #decodeSamplesFloat}. */
+    /// Reusable int→float scratch for [#decodeSamplesFloat]; grows once, then stays sized.
     private short[] floatScratch = new short[0];
 
+    /// Opens `sudFilePath` with [DecodeOptions#sudDefaults] concurrency.
     public X3Decoder(Path sudFilePath) throws Exception {
         this(sudFilePath, DecodeOptions.sudDefaults((int) RecordHeader.BYTES));
     }
 
+    /// Opens `sudFilePath`, mapping it, parsing its metadata, and building its chunk
+    /// index. SUD container framing (record header skip + pair-swap) is applied
+    /// regardless of `options`; only concurrency tuning is caller-controlled.
     public X3Decoder(Path sudFilePath, DecodeOptions options) throws Exception {
         if (options == null) {
             throw new IllegalArgumentException("options must not be null");
@@ -65,53 +69,42 @@ public class X3Decoder implements AutoCloseable {
                 sudOpts);
     }
 
-    /**
-     * Phase 1 file configuration, needed by any consumer building output headers
-     * (sample rate, channel count, bit depth, device tags).
-     */
+    /// File configuration recovered from the SUD metadata records (sample rate,
+    /// channel count, bit depth, device tags) — needed by consumers building output
+    /// headers.
     public FileMetadata metadata() {
         return metadata;
     }
 
-    /**
-     * Phase 2 in-memory index table, allowing random seeking by sample without
-     * {@code .sudx} sidecar files.
-     */
+    /// In-memory chunk index, allowing random seeking by sample without `.sudx`
+    /// sidecar files.
     public ChunkIndex chunkIndex() {
         return chunkIndex;
     }
 
-    /**
-     * Effective decode options (SUD framing applied).
-     */
+    /// Effective decode options, with SUD container framing applied.
     public DecodeOptions options() {
         return options;
     }
 
-    /**
-     * Phase 4 pipeline (tests / diagnostics).
-     */
+    /// Underlying chunk pipeline (tests / diagnostics).
     public ChunkPipeline pipeline() {
         return pipeline;
     }
 
-    /**
-     * High-Performance Integer Read: Direct 1D array delivery for libsndfile/FLAC pipeline.
-     * CRITICAL RULE: Destination array must be pre-allocated by the caller to preserve zero allocation.
-     *
-     * @param startSample first frame index (per channel)
-     * @param length      number of frames to decode
-     * @param destIntBuffer interleaved destination ({@code length * channels} capacity from index 0)
-     * @return number of frames written
-     */
+    /// Decodes `length` frames starting at `startSample` into `destIntBuffer`
+    /// (interleaved, `length * channels` capacity from index 0). Caller pre-allocates
+    /// the buffer so repeated reads stay allocation-free.
+    ///
+    /// @return number of frames written
     public int decodeSamplesInt(long startSample, int length, short[] destIntBuffer) {
         return pipeline.decodeWindowInt(startSample, length, destIntBuffer);
     }
 
-    /**
-     * High-Performance Float Read: Direct on-the-fly normalization scaling for float apps.
-     * CRITICAL RULE: Absolutely zero allocation on the steady-state path (scratch grows once).
-     */
+    /// Same as [#decodeSamplesInt] but normalizes into `[-1, 1)` floats. Internal
+    /// int scratch grows once to the largest requested window, then stays allocation-free.
+    ///
+    /// @return number of frames written
     public int decodeSamplesFloat(long startSample, int length, float[] destFloatBuffer) {
         if (length <= 0) {
             return 0;
@@ -146,12 +139,9 @@ public class X3Decoder implements AutoCloseable {
         return defaultLen;
     }
 
+    /// Unmaps the underlying file.
     @Override
     public void close() {
         mapper.close();
-    }
-
-    public static void main(String[] args) {
-        System.out.println("X3 Audio Decoder Engine (JDK 25 FFM API)");
     }
 }

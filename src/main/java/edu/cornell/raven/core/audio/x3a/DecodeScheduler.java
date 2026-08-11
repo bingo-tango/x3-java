@@ -2,13 +2,11 @@ package edu.cornell.raven.core.audio.x3a;
 
 import java.util.concurrent.Semaphore;
 
-/**
- * Process-wide throttle for in-flight X3 chunk decode work.
- * <p>
- * Virtual threads are cheap; this limits how many decode tasks run at once so multiple
- * decoders (and the host app) do not oversubscribe carrier CPUs. Defaults are conservative
- * for library embedding: {@code min(8, max(1, cores/2))}.
- */
+/// Process-wide throttle for in-flight X3 chunk decode work.
+///
+/// Virtual threads are cheap to spawn, so nothing else caps concurrency; this exists so
+/// multiple decoders in one process (or the host app around them) don't oversubscribe
+/// carrier-thread CPUs by all fanning out at once.
 public final class DecodeScheduler {
 
     private static final String PROP_SHARED = "x3a.decode.sharedMaxConcurrency";
@@ -18,9 +16,7 @@ public final class DecodeScheduler {
     private DecodeScheduler() {
     }
 
-    /**
-     * Default process-wide budget: {@code min(8, max(1, availableProcessors() / 2))}.
-     */
+    /// Default process-wide budget: `min(8, max(1, availableProcessors() / 2))`.
     public static int defaultSharedConcurrency() {
         int fromProp = positiveIntProperty(PROP_SHARED, -1);
         if (fromProp > 0) {
@@ -30,17 +26,13 @@ public final class DecodeScheduler {
         return Math.clamp(cores / 2, 1, 8);
     }
 
-    /**
-     * Default per-decoder fan-out: {@code min(4, max(1, availableProcessors()))}.
-     */
+    /// Default per-decoder fan-out: `min(4, max(1, availableProcessors()))`.
     public static int defaultPerDecoderConcurrency() {
         int cores = Runtime.getRuntime().availableProcessors();
         return Math.clamp(cores / 2, 1, 4);
     }
 
-    /**
-     * Shared limiter used when {@link DecodeOptions#useSharedLimiter()} is true.
-     */
+    /// Shared limiter used when [DecodeOptions#useSharedLimiter()] is true.
     public static Semaphore sharedLimiter() {
         return SHARED;
     }

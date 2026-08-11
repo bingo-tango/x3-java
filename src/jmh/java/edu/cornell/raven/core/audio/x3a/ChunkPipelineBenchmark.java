@@ -19,6 +19,8 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.util.concurrent.TimeUnit;
 
+/// Measures [ChunkPipeline]'s windowed-decode throughput across concurrency levels,
+/// to check that raising `maxConcurrency` actually pays off rather than adding overhead.
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)
 @Warmup(iterations = 1, time = 1)
@@ -27,6 +29,7 @@ import java.util.concurrent.TimeUnit;
 @State(Scope.Thread)
 public class ChunkPipelineBenchmark {
 
+    /// Concurrency levels swept by this benchmark.
     @Param({"1", "2", "4", "8"})
     public int concurrency;
 
@@ -53,11 +56,13 @@ public class ChunkPipelineBenchmark {
         arena.close();
     }
 
+    /// Int window read at [#concurrency].
     @Benchmark
     public void decodeWindowInt(Blackhole blackhole) {
         blackhole.consume(pipeline.decodeWindowInt(0L, intDest.length, intDest));
     }
 
+    /// Float window read at [#concurrency], including normalization.
     @Benchmark
     public void decodeWindowFloat(Blackhole blackhole) {
         blackhole.consume(pipeline.decodeWindowFloat(0L, floatDest.length, floatDest, scratch));

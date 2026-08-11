@@ -1,7 +1,5 @@
 plugins {
     id 'java'
-    id 'application'
-    id 'org.beryx.jlink' version '4.1.1'
     id 'me.champeau.jmh' version '0.7.3'
     id 'org.openjfx.javafxplugin' version '0.1.0'
 }
@@ -19,8 +17,17 @@ java {
     }
 }
 
-application {
-    mainClass = 'edu.cornell.raven.core.audio.x3a.sud.X3Decoder'
+// Library API docs only: source/classpath pinned to the main source set so the
+// tools (JavaFX test app) and jmh (benchmark) source sets never leak in, even if
+// someone later adds a dependency between them.
+javadoc {
+    source = sourceSets.main.allJava
+    classpath = sourceSets.main.compileClasspath
+    title = "X3 Java Codec ${version} API"
+    options {
+        encoding = 'UTF-8'
+        memberLevel = JavadocMemberLevel.PUBLIC
+    }
 }
 
 // Phase 6: minimal JavaFX drag-and-drop verification app — test scaffolding, not
@@ -125,16 +132,5 @@ tasks.register('conversionBenchmark', JavaExec) {
     }
     if (project.hasProperty('conv.i')) {
         args '-i', project.property('conv.i')
-    }
-}
-
-jlink {
-    // Derived from project.group by default, which would reintroduce the
-    // "module name component x3a should avoid terminal digits" warning.
-    mergedModuleName = 'edu.cornell.raven.core.audio.x3a.merged.module'
-    imageZip = project.file("${project.layout.buildDirectory.get().asFile}/distributions/x3a-decoder-image.zip")
-    options = ['--strip-debug', '--compress', 'zip-6', '--no-header-files', '--no-man-pages']
-    launcher {
-        name = 'x3decoder'
     }
 }

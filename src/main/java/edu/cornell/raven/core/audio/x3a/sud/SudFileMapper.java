@@ -10,44 +10,41 @@ import java.nio.file.StandardOpenOption;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * Phase 1: Maps a {@code .SUD} file into an off-heap {@link MemorySegment}
- * without copying payload bytes onto the JVM heap, and extracts global
- * device/audio configuration from the file's metadata/event records.
- *
- * <p>Record framing and text encoding below were empirically reverse-engineered
- * from {@code src/test/resources/7867.230815161432.sud} (no vendor spec was
- * available). Every record in the file, metadata or binary audio chunk alike,
- * shares this framing:
- * <pre>
- * offset  0: short  sync            (always 0x52, 0xA9)
- * offset  2: short  reserved0       (always 0x00, 0x00 in the fixture)
- * offset  4: short  payloadLength   (little-endian, bytes following the header)
- * offset  6: short  recordType      (1 == metadata/event record; any other value
- *                                    marks a binary acoustic-audio chunk, and is
- *                                    itself that chunk's decoded sample count —
- *                                    see {@link ChunkIndex}, which indexes those
- *                                    chunks. This class skips them via
- *                                    payloadLength without decoding.)
- * offset  8: int    sessionId       (opaque; constant across a file's metadata run)
- * offset 12: short  sequence        (opaque; not needed for Phase 1)
- * offset 14: byte[6] recordTag      (opaque; not needed for Phase 1)
- * offset 20: payload (payloadLength bytes)
- * </pre>
- * Metadata records appear both before the first audio chunk (device tags,
- * decimation/codec {@code <CFG>} chain) and after the last one (an end-of-session
- * {@code <EVENT>}); both runs are captured.
- * Metadata/event payloads are plain ASCII XML-like text ({@code <EVENT>...},
- * {@code <CFG ...>...}) stored with every adjacent byte pair swapped, e.g. the
- * bytes for {@code "<EVENT>"} are stored as {@code "E<EVTN..."}.
- *
- * <p>{@link FileMetadata#xmlConfig()} concatenates every decoded metadata/event
- * record in file order (device tags, config blocks, etc.) under a single
- * synthetic {@code <SUD_METADATA>} root, so it is the complete recovered
- * metadata document rather than just the {@code <CFG>} fragments. Callers
- * needing to persist it (e.g. as a sidecar file next to a decoded WAV) can
- * simply {@code Files.writeString(path, metadata.xmlConfig())}.
- */
+/// Maps a `.SUD` file into an off-heap [MemorySegment] without copying payload bytes
+/// onto the JVM heap, and extracts global device/audio configuration from the file's
+/// metadata/event records.
+///
+/// Record framing and text encoding below were empirically reverse-engineered from
+/// `src/test/resources/7867.230815161432.sud` (no vendor spec was available). Every
+/// record in the file, metadata or binary audio chunk alike, shares this framing:
+///
+/// ```
+/// offset  0: short  sync            (always 0x52, 0xA9)
+/// offset  2: short  reserved0       (always 0x00, 0x00 in the fixture)
+/// offset  4: short  payloadLength   (little-endian, bytes following the header)
+/// offset  6: short  recordType      (1 == metadata/event record; any other value
+///                                    marks a binary acoustic-audio chunk, and is
+///                                    itself that chunk's decoded sample count —
+///                                    see [ChunkIndex], which indexes those
+///                                    chunks. This class skips them via
+///                                    payloadLength without decoding.)
+/// offset  8: int    sessionId       (opaque; constant across a file's metadata run)
+/// offset 12: short  sequence        (opaque)
+/// offset 14: byte[6] recordTag      (opaque)
+/// offset 20: payload (payloadLength bytes)
+/// ```
+///
+/// Metadata records appear both before the first audio chunk (device tags,
+/// decimation/codec `<CFG>` chain) and after the last one (an end-of-session
+/// `<EVENT>`); both runs are captured. Metadata/event payloads are plain ASCII
+/// XML-like text (`<EVENT>...`, `<CFG ...>...`) stored with every adjacent byte pair
+/// swapped, e.g. the bytes for `"<EVENT>"` are stored as `"E<EVTN..."`.
+///
+/// [FileMetadata#xmlConfig()] concatenates every decoded metadata/event record in
+/// file order (device tags, config blocks, etc.) under a single synthetic
+/// `<SUD_METADATA>` root, so it is the complete recovered metadata document rather
+/// than just the `<CFG>` fragments. Callers needing to persist it (e.g. as a sidecar
+/// file next to a decoded WAV) can simply `Files.writeString(path, metadata.xmlConfig())`.
 public final class SudFileMapper implements AutoCloseable {
 
     static final long SYNC_SEARCH_WINDOW = 65_536L;
@@ -59,29 +56,30 @@ public final class SudFileMapper implements AutoCloseable {
     private final Arena arena;
     private final MemorySegment mappedFile;
 
+    /// Maps `sudFilePath` read-only. Uses a shared [Arena] since chunk decode reads
+    /// the mapping from multiple virtual worker threads.
     public SudFileMapper(Path sudFilePath) throws Exception {
-        // Shared arena: Phase 4 parallel decode reads the map from virtual worker threads.
         this.arena = Arena.ofShared();
         try (FileChannel channel = FileChannel.open(sudFilePath, StandardOpenOption.READ)) {
             this.mappedFile = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size(), arena);
         }
     }
 
+    /// The zero-copy mapped file.
     public MemorySegment mappedFile() {
         return mappedFile;
     }
 
+    /// Mapped file size in bytes.
     public long size() {
         return mappedFile.byteSize();
     }
 
-    /**
-     * Walks every record in the file, decoding metadata/event records (both the
-     * leading configuration run and any trailing end-of-session records after the
-     * binary acoustic-audio chunks) to recover device tags and audio configuration.
-     * Non-metadata records are skipped via their payload length without decoding.
-     * Falls back to typical SoundTrap defaults if no records are found.
-     */
+    /// Walks every record in the file, decoding metadata/event records (both the
+    /// leading configuration run and any trailing end-of-session records after the
+    /// binary acoustic-audio chunks) to recover device tags and audio configuration.
+    /// Non-metadata records are skipped via their payload length without decoding.
+    /// Falls back to typical SoundTrap defaults if no records are found.
     public FileMetadata parseHeader() {
         long fileSize = mappedFile.byteSize();
         long searchLimit = Math.min(fileSize, SYNC_SEARCH_WINDOW);
@@ -145,8 +143,8 @@ public final class SudFileMapper implements AutoCloseable {
             bitDepth = fallbackBitDepth;
         }
         // Wrap the concatenated <EVENT>/<CFG> fragments in a synthetic root so the result is one
-        // well-formed XML document, suitable for writing out as a sidecar file (e.g. Phase 6's
-        // WAV export writing the full recovered metadata alongside the decoded audio).
+        // well-formed XML document, suitable for writing out as a sidecar file alongside the
+        // decoded audio.
         String fullXml = xmlConfig.isEmpty() ? "" : "<SUD_METADATA>\n" + xmlConfig + "</SUD_METADATA>\n";
         if (sampleRate < 0) {
             return new FileMetadata(576_000, 1, 16, deviceId == null ? "UNKNOWN" : deviceId, fullXml);
@@ -188,6 +186,7 @@ public final class SudFileMapper implements AutoCloseable {
         }
     }
 
+    /// Unmaps the file by closing the backing arena.
     @Override
     public void close() {
         arena.close();

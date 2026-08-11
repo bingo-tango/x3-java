@@ -10,27 +10,33 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
 
-/**
- * Phase 4: Parallel chunk decompression pipeline using virtual threads.
- * Work units are stateless slices; callers (typically {@code ...sud} facade) supply the
- * flattened index table from the container layer so this codec package stays free of SUD types.
- * <p>
- * Index layout per chunk (4 longs): {@code [Sample_Offset, File_Byte_Offset, Chunk_Length, Frame_Timestamp]}.
- * {@code File_Byte_Offset} points at the start of the container record; {@code payloadHeaderBytes}
- * skips any fixed header before the X3 bitstream.
- * <p>
- * Active chunk work is bounded by a per-pipeline semaphore ({@code maxConcurrency}) and, when
- * configured, the process-wide {@link DecodeScheduler#sharedLimiter()}. Fan-out uses a
- * virtual-thread-per-task executor (stable API; avoids preview {@code StructuredTaskScope}).
- */
+/// Parallel chunk decompression over virtual threads, for random-access windowed decode.
+///
+/// Work units are stateless slices; callers (typically the `...sud` facade) supply the
+/// flattened index table from the container layer, so this codec package stays free of
+/// any SUD-specific type.
+///
+/// Index layout per chunk (4 longs): `[Sample_Offset, File_Byte_Offset, Chunk_Length,
+/// Frame_Timestamp]`. `File_Byte_Offset` points at the start of the container record;
+/// `payloadHeaderBytes` skips any fixed header before the X3 bitstream.
+///
+/// Active chunk work is bounded by a per-pipeline semaphore (`maxConcurrency`) and,
+/// when configured, the process-wide [DecodeScheduler#sharedLimiter()] — so many
+/// concurrent decoders in one process don't oversubscribe CPU. Fan-out uses a
+/// virtual-thread-per-task executor (the stable API, avoiding preview `StructuredTaskScope`).
 public final class ChunkPipeline {
 
+    /// Longs per chunk index entry.
     public static final int INDEX_STRIDE = 4;
+    /// Index-entry offset of a chunk's starting sample.
     public static final int SAMPLE_OFFSET = 0;
+    /// Index-entry offset of a chunk's starting byte in the mapped file.
     public static final int FILE_BYTE_OFFSET = 1;
+    /// Index-entry offset of a chunk's payload length in bytes.
     public static final int CHUNK_LENGTH = 2;
 
-    /** Below this many chunks in a window, parallel fan-out is skipped. */
+    /// Below this many chunks in a window, parallel fan-out is skipped — task setup would
+    /// cost more than the sequential decode it replaces.
     private static final int PARALLEL_CHUNK_FLOOR = 2;
 
     private final MemorySegment mappedFile;
@@ -45,9 +51,10 @@ public final class ChunkPipeline {
     private final int payloadHeaderBytes;
     private final boolean sudPayload;
 
-    /** Reusable sequential-path scratch (not used by parallel tasks). */
+    /// Reusable sequential-path scratch (not used by parallel tasks).
     private short[] seqScratch = new short[8192];
 
+    /// Legacy constructor without payload framing options; assumes bare (non-SUD) payloads.
     public ChunkPipeline(MemorySegment mappedFile,
                          long[] indexTable,
                          int chunkCount,
@@ -59,6 +66,10 @@ public final class ChunkPipeline {
                         .withMaxConcurrency(maxConcurrency));
     }
 
+    /// Builds a pipeline over an already-computed chunk index.
+    ///
+    /// @param totalSamples explicit sample count, since the last chunk's length can't be
+    ///                      inferred from the index table alone
     public ChunkPipeline(MemorySegment mappedFile,
                          long[] indexTable,
                          int chunkCount,
@@ -82,12 +93,10 @@ public final class ChunkPipeline {
         this.sudPayload = options.sudPayload();
     }
 
-    /**
-     * Decodes a closed sample window {@code [startSample, startSample + length)} into interleaved
-     * {@code dest} (capacity {@code length * channels} from index 0).
-     *
-     * @return number of PCM frames written
-     */
+    /// Decodes a closed sample window `[startSample, startSample + length)` into interleaved
+    /// `dest` (capacity `length * channels` from index 0).
+    ///
+    /// @return number of PCM frames written
     public int decodeWindowInt(long startSample, int length, short[] dest) {
         if (length <= 0 || chunkCount == 0 || dest == null) {
             return 0;
@@ -116,12 +125,10 @@ public final class ChunkPipeline {
         return decodeParallel(startSample, end, length, first, last, dest);
     }
 
-    /**
-     * Same as {@link #decodeWindowInt} with on-the-fly float normalization into {@code dest}.
-     * {@code scratch} must hold at least {@code length * channels} samples.
-     *
-     * @return number of PCM frames written
-     */
+    /// Same as [#decodeWindowInt] with on-the-fly float normalization into `dest`.
+    /// `scratch` must hold at least `length * channels` samples.
+    ///
+    /// @return number of PCM frames written
     public int decodeWindowFloat(long startSample, int length, float[] dest, short[] scratch) {
         if (length <= 0) {
             return 0;
@@ -135,18 +142,22 @@ public final class ChunkPipeline {
         return frames;
     }
 
+    /// Configured cap on concurrently in-flight chunk decode tasks for this pipeline.
     public int maxConcurrency() {
         return maxConcurrency;
     }
 
+    /// Channel count decoded chunks are interleaved with.
     public int channels() {
         return channels;
     }
 
+    /// Total decodable samples, the upper bound for [#decodeWindowInt] windows.
     public long totalSamples() {
         return totalSamples;
     }
 
+    /// Whether this pipeline also acquires the process-wide [DecodeScheduler#sharedLimiter()].
     public boolean usesSharedLimiter() {
         return sharedLimiter != null;
     }
