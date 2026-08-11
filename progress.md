@@ -179,7 +179,51 @@ Target: close the gap vs x3-rust (~470 MB/s decompress) without changing the cod
 
 Paper suite after change (aggregate): decode **~223 MB/s** (was ~100–120); encode
 ~148 MB/s; ratio unchanged 0.2386. Rust reference decode ~473 MB/s — remaining gap
-is mostly native I/O + tighter rice loops, not alloc thrash.
+closed by parallel frame decode below.
+
+## Parallel archive frame decode (x3a_to_wav): DONE
+
+`X3Files.decodeArchive` ran entirely single-threaded despite Phase 4's proven
+`ChunkPipeline` / `DecodeOptions` / `DecodeScheduler` virtual-thread pattern (built for
+the SUD path) never being applied to the bare `.x3a` archive path. Frames are
+independent — each stores its own filter state (`X3AudioDecoder` reads it fresh per
+frame; `X3AudioEncoder.encodeFrame` writes it fresh per frame) — so per-frame decode has
+no cross-frame dependency and is safe to parallelize.
+
+1. **Single-pass header/frame scan** — `decodeArchive` used to walk frame headers
+   *twice* (once to sum PCM capacity, once to decode), verifying header CRC via
+   `X3FrameHeader.decode` both times. Replaced with one pass that verifies header CRC
+   once and payload CRC once per frame (including metadata frames mid-stream, matching
+   the original semantics exactly) while recording frame descriptors
+   (`payloadOffset`/`payloadLen`/`sampleCount`/`channels`/`pcmOffset`) into growable
+   `int[]` arrays.
+2. **Parallel frame decode** — new `X3Files.decodeArchive(byte[], DecodeOptions)`
+   overload (the existing no-arg overload delegates to `DecodeOptions.defaults()`).
+   Below `PARALLEL_FRAME_FLOOR = 2` frames or `maxConcurrency == 1`, decodes
+   sequentially exactly as before. Otherwise dispatches one task per data frame on
+   `Executors.newVirtualThreadPerTaskExecutor()`, gated by a local + optional shared
+   `Semaphore` (mirrors `ChunkPipeline.decodeParallel`); each task uses a task-local
+   `X3AudioDecoder.newInstance()` and writes into its own disjoint `pcm` slice — no
+   locking needed. `ExecutionException` unwrapped/rethrown the same way as
+   `ChunkPipeline`.
+
+Paper-suite decode throughput, before/after (same machine, warm file cache, multiple
+repeated single-shot JMH runs to account for run-to-run noise):
+
+| Variant | Decompression speed (MB/s) |
+|---|---|
+| Before (two-pass, sequential) | ~222 (220.97 / 222.85 / 222.22) |
+| After, sequential fallback (`-Dx3a.decode.maxConcurrency=1`) | ~449 (454.65 / 450.74 / 441.49) |
+| After, parallel (default `DecodeOptions`) | ~479 (479.14 / 474.29 / 482.35) |
+
+Compression ratio unchanged (0.23860817352929073); `./gradlew test` passes bit-identical
+round-trips (parallel decode output matches sequential exactly). Most of the ~2x win
+comes from the single-pass refactor itself (removing the redundant header-CRC pass);
+parallel fan-out adds a further ~6–7% on these file sizes. Java decode now **exceeds**
+the x3-rust single-threaded reference (~473 MB/s) when run in parallel (the default),
+and lands within ~5% of it running strictly sequential. Single-shot JMH with 1 warmup
+iteration has genuine run-to-run variance — treat these as representative, not
+lab-precise, numbers.
 
 ## Phases 5–6
 

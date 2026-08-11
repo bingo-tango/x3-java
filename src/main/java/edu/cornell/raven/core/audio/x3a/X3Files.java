@@ -5,6 +5,15 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -15,6 +24,9 @@ import java.util.regex.Pattern;
  * (x3-rust / x3new.m): {@code X3ARCHIV} + XML config frame + data frames.
  */
 public final class X3Files {
+
+    /** Below this many data frames, parallel fan-out is skipped (matches {@link ChunkPipeline}). */
+    private static final int PARALLEL_FRAME_FLOOR = 2;
 
     private static final Pattern FS = Pattern.compile("<FS[^>]*>(\\d+)</FS>", Pattern.CASE_INSENSITIVE);
     private static final Pattern BLKLEN = Pattern.compile("<BLKLEN>(\\d+)</BLKLEN>", Pattern.CASE_INSENSITIVE);
@@ -112,12 +124,23 @@ public final class X3Files {
     }
 
     /**
+     * Decode a full archive image to interleaved PCM + stream metadata, using
+     * {@link DecodeOptions#defaults()} for frame-decode concurrency.
+     */
+    public static DecodedArchive decodeArchive(byte[] archive) {
+        return decodeArchive(archive, DecodeOptions.defaults());
+    }
+
+    /**
      * Decode a full archive image to interleaved PCM + stream metadata.
      * <p>
      * Single pre-sized PCM buffer; frame payloads are zero-copy slices of the archive
-     * array (no per-frame arena or chunk list).
+     * array (no per-frame arena or chunk list). Data frames are independent (each stores
+     * its own filter state), so above {@code options.maxConcurrency() > 1} they decode in
+     * parallel on virtual threads, gated by a local + optional shared {@link Semaphore}
+     * (mirrors {@link ChunkPipeline#decodeWindowInt}).
      */
-    public static DecodedArchive decodeArchive(byte[] archive) {
+    public static DecodedArchive decodeArchive(byte[] archive, DecodeOptions options) {
         if (archive.length < X3FrameHeader.ARCHIVE_ID.length + X3FrameHeader.LENGTH) {
             throw new IllegalArgumentException("archive too small");
         }
@@ -145,30 +168,18 @@ public final class X3Files {
         int[] rice = parseTriple(CODES, xml, X3AudioEncoder.DEFAULT_RICE_ORDERS);
         X3AudioDecoder decoder = new X3AudioDecoder(blockLen, rice);
 
-        // Pass 1: sum PCM samples from frame headers (cheap; exact capacity).
+        // Single pass: verify header CRC (via X3FrameHeader.decode) and payload CRC exactly
+        // once per frame — including metadata frames, matching the original two-pass
+        // semantics — while recording data-frame descriptors for decode.
         int channels = 1;
+        int frameCount = 0;
+        int[] payloadOffset = new int[16];
+        int[] payloadLen = new int[16];
+        int[] sampleCount = new int[16];
+        int[] frameChannels = new int[16];
+        int[] pcmOffset = new int[16];
+
         int totalSamples = 0;
-        int scan = pos;
-        while (scan + X3FrameHeader.LENGTH <= archive.length) {
-            int key = X3FrameHeader.getBe16(archive, scan);
-            if (key != X3FrameHeader.KEY) {
-                break;
-            }
-            X3FrameHeader fh = X3FrameHeader.decode(archive, scan);
-            scan += X3FrameHeader.LENGTH;
-            if (fh.payloadLen <= 0 || scan + fh.payloadLen > archive.length) {
-                break;
-            }
-            if (fh.samples > 0) {
-                channels = Math.max(1, fh.channels);
-                totalSamples += fh.samples * channels;
-            }
-            scan += fh.payloadLen;
-        }
-
-        short[] pcm = totalSamples > 0 ? new short[totalSamples] : new short[0];
-        int out = 0;
-
         while (pos + X3FrameHeader.LENGTH <= archive.length) {
             int key = X3FrameHeader.getBe16(archive, pos);
             if (key != X3FrameHeader.KEY) {
@@ -184,27 +195,101 @@ public final class X3Files {
                 throw new IllegalArgumentException("frame payload CRC mismatch at " + (pos - X3FrameHeader.LENGTH));
             }
 
-            if (fh.samples <= 0) {
-                // metadata frame mid-stream — skip
-                pos += fh.payloadLen;
-                continue;
+            if (fh.samples > 0) {
+                channels = Math.max(1, fh.channels);
+                int n = fh.samples * channels;
+                if (frameCount == payloadOffset.length) {
+                    int cap = payloadOffset.length * 2;
+                    payloadOffset = Arrays.copyOf(payloadOffset, cap);
+                    payloadLen = Arrays.copyOf(payloadLen, cap);
+                    sampleCount = Arrays.copyOf(sampleCount, cap);
+                    frameChannels = Arrays.copyOf(frameChannels, cap);
+                    pcmOffset = Arrays.copyOf(pcmOffset, cap);
+                }
+                payloadOffset[frameCount] = pos;
+                payloadLen[frameCount] = fh.payloadLen;
+                sampleCount[frameCount] = fh.samples;
+                frameChannels[frameCount] = channels;
+                pcmOffset[frameCount] = totalSamples;
+                frameCount++;
+                totalSamples += n;
             }
-
-            channels = Math.max(1, fh.channels);
-            int nSamples = fh.samples * channels;
-            // Direct heap range — no Arena / MemorySegment on the archive hot path.
-            decoder.decodeChunkInt(archive, pos, fh.payloadLen, fh.samples, channels, pcm, out, false);
-            out += nSamples;
             pos += fh.payloadLen;
         }
 
-        if (out != pcm.length) {
-            // Defensive: header scan and decode disagreed (should not happen).
-            short[] trim = new short[out];
-            System.arraycopy(pcm, 0, trim, 0, out);
-            pcm = trim;
+        short[] pcm = totalSamples > 0 ? new short[totalSamples] : new short[0];
+
+        if (frameCount < PARALLEL_FRAME_FLOOR || options.maxConcurrency() == 1) {
+            for (int i = 0; i < frameCount; i++) {
+                decoder.decodeChunkInt(archive, payloadOffset[i], payloadLen[i], sampleCount[i],
+                        frameChannels[i], pcm, pcmOffset[i], false);
+            }
+        } else {
+            decodeFramesParallel(archive, decoder, frameCount, payloadOffset, payloadLen,
+                    sampleCount, frameChannels, pcmOffset, pcm, options);
         }
+
         return new DecodedArchive(sampleRate, channels, pcm);
+    }
+
+    private static void decodeFramesParallel(byte[] archive, X3AudioDecoder decoder, int frameCount,
+            int[] payloadOffset, int[] payloadLen, int[] sampleCount, int[] frameChannels,
+            int[] pcmOffset, short[] pcm, DecodeOptions options) {
+        int maxConcurrency = Math.max(1, options.maxConcurrency());
+        Semaphore localLimiter = new Semaphore(maxConcurrency, false);
+        Semaphore sharedLimiter = options.useSharedLimiter() ? options.sharedLimiter() : null;
+
+        List<Callable<Void>> tasks = new ArrayList<>(frameCount);
+        for (int i = 0; i < frameCount; i++) {
+            final int idx = i;
+            tasks.add(() -> {
+                acquirePermits(localLimiter, sharedLimiter);
+                try {
+                    // Task-local decoder: X3AudioDecoder keeps block scratch on the instance.
+                    X3AudioDecoder local = decoder.newInstance();
+                    local.decodeChunkInt(archive, payloadOffset[idx], payloadLen[idx], sampleCount[idx],
+                            frameChannels[idx], pcm, pcmOffset[idx], false);
+                    return null;
+                } finally {
+                    releasePermits(localLimiter, sharedLimiter);
+                }
+            });
+        }
+
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<Void>> futures = executor.invokeAll(tasks);
+            for (Future<Void> future : futures) {
+                future.get();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted during parallel archive decode", e);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            if (cause instanceof RuntimeException re) {
+                throw re;
+            }
+            throw new IllegalStateException("parallel archive decode failed", cause);
+        }
+    }
+
+    private static void acquirePermits(Semaphore localLimiter, Semaphore sharedLimiter) throws InterruptedException {
+        localLimiter.acquire();
+        if (sharedLimiter != null) {
+            try {
+                sharedLimiter.acquire();
+            } catch (InterruptedException | RuntimeException e) {
+                localLimiter.release();
+                throw e;
+            }
+        }
+    }
+
+    private static void releasePermits(Semaphore localLimiter, Semaphore sharedLimiter) {
+        if (sharedLimiter != null) {
+            sharedLimiter.release();
+        }
+        localLimiter.release();
     }
 
     public static final class DecodedArchive {
