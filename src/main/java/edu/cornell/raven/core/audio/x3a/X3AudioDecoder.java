@@ -22,13 +22,21 @@ public final class X3AudioDecoder {
     private static final int MAX_CHANNELS = 8;
     private static final int MAX_BLOCK_LEN = 64;
 
+    /// Narrowest BFP width a real encoder ever emits (below this, Rice coding always wins),
+    /// matching x3-rust's rejection of smaller widths as corrupt/invalid.
+    private static final int MIN_BFP_WIDTH = 6;
+
     private final int blockLen;
     private final int[] riceOrders;
 
     /// Scratch for one channel's block residuals (reused; no per-block alloc).
     private final short[] blockScratch = new short[MAX_BLOCK_LEN];
 
-    /// SoundTrap defaults: 16-sample blocks, rice orders `{0, 1, 3}`.
+    /// SoundTrap/SUD defaults (16-sample blocks, rice orders `{0, 1, 3}`) — the fallback
+    /// [ChunkPipeline] constructs when no decoder is supplied. Plain `.x3a` archives use
+    /// [X3AudioEncoder#DEFAULT_BLOCK_LEN] (20) instead; [X3Files] always parses the
+    /// archive's own `<BLKLEN>` and constructs a decoder with the matching value, so this
+    /// default is never used for archive decode.
     public X3AudioDecoder() {
         this(16, new int[] {0, 1, 3});
     }
@@ -156,6 +164,7 @@ public final class X3AudioDecoder {
             nb = br.readBits(4);
             if (nb > 0) {
                 nb++;
+                checkBfpWidth(nb);
             } else {
                 int nn = br.readBits(6) + 1;
                 if (nn > blockLen) {
@@ -165,6 +174,7 @@ public final class X3AudioDecoder {
                 code = br.readBits(2);
                 if (code == 0) {
                     nb = br.readBits(4) + 1;
+                    checkBfpWidth(nb);
                 }
             }
         }
@@ -184,6 +194,14 @@ public final class X3AudioDecoder {
             unpackBfpIntegrate(br, out, n, nb, last);
         }
         return n;
+    }
+
+    /// Rejects BFP widths a real encoder never emits — [#MIN_BFP_WIDTH] .. 16 is the only
+    /// valid range (16 itself is the literal pass-through case).
+    private static void checkBfpWidth(int nb) {
+        if (nb < MIN_BFP_WIDTH || nb > 16) {
+            throw new IllegalStateException("invalid BFP width: " + nb);
+        }
     }
 
     /// RICE order-0: unary only (stop bit, no suffix); fuse integrate.

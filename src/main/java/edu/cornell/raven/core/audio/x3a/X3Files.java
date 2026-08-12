@@ -26,6 +26,8 @@ public final class X3Files {
     /// Below this many data frames, parallel fan-out is skipped (matches [ChunkPipeline]).
     private static final int PARALLEL_FRAME_FLOOR = 2;
 
+    private static final long NANOS_PER_SECOND = 1_000_000_000L;
+
     private static final Pattern FS = Pattern.compile("<FS[^>]*>(\\d+)</FS>", Pattern.CASE_INSENSITIVE);
     private static final Pattern BLKLEN = Pattern.compile("<BLKLEN>(\\d+)</BLKLEN>", Pattern.CASE_INSENSITIVE);
     private static final Pattern CODES = Pattern.compile(
@@ -98,7 +100,8 @@ public final class X3Files {
                 int sampleOff = offFrames * channels;
                 BitstreamWriter bp = encoder.encodeFrame(pcm, sampleOff, n, channels);
                 byte[] payload = bp.toByteArray();
-                out.write(new X3FrameHeader(1, channels, n, payload.length, 0L, bp.crc()).encode());
+                long timeNanos = offFrames * NANOS_PER_SECOND / sampleRate;
+                out.write(new X3FrameHeader(1, channels, n, payload.length, timeNanos, bp.crc()).encode());
                 out.write(payload);
                 offFrames += n;
             }
