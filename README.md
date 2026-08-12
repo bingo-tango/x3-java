@@ -37,9 +37,12 @@ Two runnable entry points exist for manual testing and performance work:
 ./gradlew runTestApp
 ```
 
-Opens a small JavaFX window with a single drop zone. Drag in a `.sud` or
-`.x3a` file and it converts on a background thread, writing a `.wav` (and a
-`.xml` metadata sidecar, when metadata is available) next to the source file.
+Opens a small JavaFX window with a single drop zone. Drag in one `.x3a` file
+and it converts on a background thread, same as before. Drag in one or more
+`.SUD` files, or a folder (scanned recursively for `.SUD` files), and they
+decode in parallel across virtual threads, with an overall progress bar and a
+per-file status list. Every output gets a `.wav` (and a `.xml` metadata
+sidecar, when metadata is available) next to its source file.
 This is test scaffolding for manually verifying the decoder end-to-end — it's
 not part of the library API and isn't exported from the Java module.
 

@@ -6,49 +6,84 @@ import edu.cornell.raven.core.audio.x3a.sud.X3Decoder;
 
 import javafx.application.Application;
 import javafx.application.Platform;
+import javafx.collections.FXCollections;
+import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Label;
+import javafx.scene.control.ListCell;
+import javafx.scene.control.ListView;
+import javafx.scene.control.ProgressBar;
 import javafx.scene.input.DragEvent;
 import javafx.scene.input.Dragboard;
 import javafx.scene.input.TransferMode;
+import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
+import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
-/// Minimal drag-and-drop verification app — drop a `.SUD` or `.x3a` file, get a
-/// `.wav` (plus a `.xml` metadata sidecar when recovered metadata is available)
-/// next to it.
+/// Drag-and-drop verification app for the decoder. Dropping a single `.x3a` file
+/// converts it to `.wav` in place, unchanged from the original single-file flow.
+/// Dropping one or more `.SUD` files, or a folder, walks every dropped folder for
+/// `.SUD` files (recursively) and decodes the whole batch in parallel, showing
+/// overall progress plus a per-file status list. Each output `.wav` gets an `.xml`
+/// metadata sidecar next to it when recovered metadata is available.
 ///
-/// Test scaffolding, not library code: no file chooser, no settings, no playback,
-/// no batch queue.
+/// Test scaffolding, not library code: no file chooser, no settings, no playback.
 public final class X3VerificationApp extends Application {
 
     private static final int WINDOW_FRAMES = 65536;
 
+    /// Batch drops fan every file out to a virtual thread immediately, but at most this
+    /// many are ever mid-conversion at once — a whole-file decode is much heavier than the
+    /// per-chunk work [edu.cornell.raven.core.audio.x3a.DecodeOptions]'s shared limiter gates.
+    private static final int MAX_PARALLEL_FILES = 4;
+
     private final ExecutorService conversions = Executors.newVirtualThreadPerTaskExecutor();
 
-    /// Builds the single-drop-zone scene.
+    /// Builds the scene: a single drop target that toggles between the plain
+    /// single-file status view and the batch progress view.
     @Override
     public void start(Stage stage) {
-        Label status = new Label("Drop a .SUD or .x3a file");
-        StackPane dropZone = new StackPane(status);
-        dropZone.setAlignment(Pos.CENTER);
-        dropZone.setPrefSize(420, 220);
-        dropZone.setStyle("-fx-border-color: gray; -fx-border-style: dashed; -fx-border-width: 2;");
+        Label status = new Label("Drop a .SUD or .x3a file, multiple .SUD files, or a folder");
+        StackPane singleView = new StackPane(status);
+        singleView.setAlignment(Pos.CENTER);
 
-        dropZone.setOnDragOver(event -> onDragOver(event, dropZone));
-        dropZone.setOnDragDropped(event -> onDragDropped(event, dropZone, status));
+        ListView<FileTask> fileList = new ListView<>();
+        fileList.setCellFactory(lv -> new FileTaskCell());
+        ProgressBar progressBar = new ProgressBar(0);
+        progressBar.setMaxWidth(Double.MAX_VALUE);
+        Label progressLabel = new Label();
+        VBox batchView = new VBox(8, progressLabel, progressBar, fileList);
+        batchView.setPadding(new Insets(10));
+        VBox.setVgrow(fileList, Priority.ALWAYS);
+        batchView.setVisible(false);
+        batchView.setManaged(false);
+
+        StackPane root = new StackPane(singleView, batchView);
+        root.setPrefSize(480, 320);
+        root.setStyle("-fx-border-color: gray; -fx-border-style: dashed; -fx-border-width: 2;");
+
+        root.setOnDragOver(event -> onDragOver(event, root));
+        root.setOnDragDropped(event ->
+                onDragDropped(event, root, status, singleView, batchView, fileList, progressBar, progressLabel));
 
         stage.setTitle("X3 Decoder Verification");
-        stage.setScene(new Scene(dropZone));
+        stage.setScene(new Scene(root));
         stage.show();
     }
 
@@ -58,29 +93,43 @@ public final class X3VerificationApp extends Application {
         conversions.shutdown();
     }
 
-    private void onDragOver(DragEvent event, StackPane dropZone) {
-        if (dropZone.isDisabled()) {
+    private void onDragOver(DragEvent event, StackPane root) {
+        if (root.isDisabled()) {
             return;
         }
         Dragboard db = event.getDragboard();
-        if (db.hasFiles() && db.getFiles().size() == 1 && isSupported(db.getFiles().get(0))) {
+        if (db.hasFiles() && db.getFiles().stream().allMatch(X3VerificationApp::isDroppable)) {
             event.acceptTransferModes(TransferMode.COPY);
         }
         event.consume();
     }
 
-    private void onDragDropped(DragEvent event, StackPane dropZone, Label status) {
+    private void onDragDropped(DragEvent event, StackPane root, Label status, StackPane singleView,
+                               VBox batchView, ListView<FileTask> fileList, ProgressBar progressBar,
+                               Label progressLabel) {
         Dragboard db = event.getDragboard();
-        boolean accepted = db.hasFiles() && db.getFiles().size() == 1;
+        List<File> dropped = db.hasFiles() ? new ArrayList<>(db.getFiles()) : List.of();
+        boolean accepted = !dropped.isEmpty() && dropped.stream().allMatch(X3VerificationApp::isDroppable);
         if (accepted) {
-            File dropped = db.getFiles().get(0);
-            Path input = dropped.toPath();
-            dropZone.setDisable(true);
-            status.setText("Converting " + dropped.getName() + "…");
-            conversions.submit(() -> runConversion(input, dropZone, status));
+            boolean singleX3a = dropped.size() == 1 && !dropped.get(0).isDirectory()
+                    && "x3a".equals(extensionOf(dropped.get(0).getName()));
+            root.setDisable(true);
+            if (singleX3a) {
+                Path input = dropped.get(0).toPath();
+                status.setText("Converting " + input.getFileName() + "…");
+                conversions.submit(() -> runSingleConversion(input, root, status));
+            } else {
+                status.setText("Scanning…");
+                conversions.submit(() ->
+                        startBatch(dropped, root, singleView, batchView, fileList, progressBar, progressLabel, status));
+            }
         }
         event.setDropCompleted(accepted);
         event.consume();
+    }
+
+    private static boolean isDroppable(File file) {
+        return file.isDirectory() || isSupported(file);
     }
 
     private static boolean isSupported(File file) {
@@ -93,32 +142,130 @@ public final class X3VerificationApp extends Application {
         return dot < 0 ? "" : name.substring(dot + 1).toLowerCase(Locale.ROOT);
     }
 
-    private void runConversion(Path input, StackPane dropZone, Label status) {
+    private void runSingleConversion(Path input, StackPane root, Label status) {
         try {
             Path wavOut = swapExtension(input, "wav");
-            convert(input, wavOut);
+            convertX3a(input, wavOut);
             Platform.runLater(() -> {
                 status.setText("Wrote " + wavOut.getFileName());
-                dropZone.setDisable(false);
+                root.setDisable(false);
             });
         } catch (Exception e) {
             String message = e.getMessage() != null ? e.getMessage() : e.toString();
             Platform.runLater(() -> {
                 status.setText("Failed: " + message);
-                dropZone.setDisable(false);
+                root.setDisable(false);
             });
         }
     }
 
-    private void convert(Path input, Path wavOut) throws Exception {
-        String ext = extensionOf(input.getFileName().toString());
-        if ("sud".equals(ext)) {
-            convertSud(input, wavOut);
-        } else if ("x3a".equals(ext)) {
-            convertX3a(input, wavOut);
-        } else {
-            throw new IllegalArgumentException("unsupported file type: " + input.getFileName());
+    /// Walks dropped folders for `.SUD` files off the FX thread (runs on a conversion
+    /// worker), then hands the resolved batch back to the FX thread to build the
+    /// progress view and fan out per-file conversion tasks.
+    private void startBatch(List<File> dropped, StackPane root, StackPane singleView, VBox batchView,
+                            ListView<FileTask> fileList, ProgressBar progressBar, Label progressLabel,
+                            Label status) {
+        List<Path> sudFiles;
+        try {
+            sudFiles = collectSudFiles(dropped);
+        } catch (UncheckedIOException e) {
+            Platform.runLater(() -> {
+                status.setText("Failed: " + e.getMessage());
+                root.setDisable(false);
+            });
+            return;
         }
+        if (sudFiles.isEmpty()) {
+            Platform.runLater(() -> {
+                status.setText("No .SUD files found");
+                root.setDisable(false);
+            });
+            return;
+        }
+
+        List<FileTask> tasks = new ArrayList<>(sudFiles.size());
+        for (Path path : sudFiles) {
+            tasks.add(new FileTask(path));
+        }
+        int total = tasks.size();
+        AtomicInteger completed = new AtomicInteger();
+        AtomicInteger failed = new AtomicInteger();
+
+        Platform.runLater(() -> {
+            fileList.setItems(FXCollections.observableArrayList(tasks));
+            progressBar.setProgress(0);
+            progressLabel.setText("0 / " + total + " done");
+            singleView.setVisible(false);
+            singleView.setManaged(false);
+            batchView.setVisible(true);
+            batchView.setManaged(true);
+        });
+
+        Semaphore limiter = new Semaphore(MAX_PARALLEL_FILES);
+        for (FileTask task : tasks) {
+            conversions.submit(() -> runBatchConversion(
+                    task, completed, failed, total, root, fileList, progressBar, progressLabel, limiter));
+        }
+    }
+
+    /// Recursively collects every `.SUD` file among the dropped files/folders (case-insensitive
+    /// extension), ignoring any other file types mixed into the same drop.
+    private static List<Path> collectSudFiles(List<File> dropped) {
+        List<Path> result = new ArrayList<>();
+        for (File file : dropped) {
+            Path path = file.toPath();
+            if (Files.isDirectory(path)) {
+                try (Stream<Path> walk = Files.walk(path)) {
+                    walk.filter(Files::isRegularFile)
+                            .filter(p -> "sud".equals(extensionOf(p.getFileName().toString())))
+                            .sorted()
+                            .forEach(result::add);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            } else if ("sud".equals(extensionOf(file.getName()))) {
+                result.add(path);
+            }
+        }
+        return result;
+    }
+
+    /// Decodes one batch entry, held to at most [#MAX_PARALLEL_FILES] concurrent
+    /// conversions via `limiter` — every task is submitted up front, but blocks here
+    /// until a slot frees up, so a task only flips to RUNNING once it's actually
+    /// decoding. Updates its row and the overall progress bar/count as soon as it's
+    /// done, independent of how many other files are mid-conversion.
+    private void runBatchConversion(FileTask task, AtomicInteger completed, AtomicInteger failed, int total,
+                                    StackPane root, ListView<FileTask> fileList, ProgressBar progressBar,
+                                    Label progressLabel, Semaphore limiter) {
+        try {
+            limiter.acquire();
+            try {
+                task.state = FileTask.State.RUNNING;
+                Platform.runLater(fileList::refresh);
+                convertSud(task.path, swapExtension(task.path, "wav"));
+                task.state = FileTask.State.DONE;
+            } finally {
+                limiter.release();
+            }
+        } catch (Exception e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            task.state = FileTask.State.FAILED;
+            task.message = e.getMessage() != null ? e.getMessage() : e.toString();
+            failed.incrementAndGet();
+        }
+        int done = completed.incrementAndGet();
+        Platform.runLater(() -> {
+            fileList.refresh();
+            progressBar.setProgress((double) done / total);
+            progressLabel.setText(done + " / " + total + " done"
+                    + (failed.get() > 0 ? " (" + failed.get() + " failed)" : ""));
+            if (done == total) {
+                root.setDisable(false);
+            }
+        });
     }
 
     private void convertSud(Path input, Path wavOut) throws Exception {
@@ -126,6 +273,10 @@ public final class X3VerificationApp extends Application {
             FileMetadata metadata = decoder.metadata();
             int channels = Math.max(1, metadata.channels());
             long total = decoder.chunkIndex().totalSamples();
+
+            // XML is metadata recovered up front, before any PCM is decoded — write it
+            // before the WAV so a reader sees the sidecar as soon as it appears on disk.
+            writeXmlSidecar(wavOut, metadata.xmlConfig());
 
             // Guardrail 1 (AGENTS.md): allocate the window buffer once, reuse for every window.
             short[] window = new short[WINDOW_FRAMES * channels];
@@ -142,8 +293,6 @@ public final class X3VerificationApp extends Application {
                     offset += got;
                 }
             }
-
-            writeXmlSidecar(wavOut, metadata.xmlConfig());
         }
     }
 
@@ -151,11 +300,11 @@ public final class X3VerificationApp extends Application {
         byte[] archive = Files.readAllBytes(input);
         X3Files.DecodedArchive decoded = X3Files.decodeArchive(archive);
 
+        writeXmlSidecar(wavOut, decoded.xml);
+
         try (StreamingWavWriter writer = new StreamingWavWriter(wavOut, decoded.sampleRate, decoded.channels)) {
             writer.writeFrames(decoded.pcm, decoded.frames());
         }
-
-        writeXmlSidecar(wavOut, decoded.xml);
     }
 
     private static void writeXmlSidecar(Path wavOut, String xml) throws IOException {
@@ -172,6 +321,37 @@ public final class X3VerificationApp extends Application {
         Path parent = path.getParent();
         String newName = base + "." + newExtension;
         return parent == null ? Path.of(newName) : parent.resolve(newName);
+    }
+
+    /// One batch row's mutable state; written from a conversion worker thread and read
+    /// back on the FX thread via [ListView#refresh()], so [#state] and [#message] are
+    /// volatile rather than relying on any other handoff.
+    private static final class FileTask {
+        final Path path;
+        volatile State state = State.QUEUED;
+        volatile String message = "";
+
+        FileTask(Path path) {
+            this.path = path;
+        }
+
+        enum State { QUEUED, RUNNING, DONE, FAILED }
+    }
+
+    private static final class FileTaskCell extends ListCell<FileTask> {
+        @Override
+        protected void updateItem(FileTask item, boolean empty) {
+            super.updateItem(item, empty);
+            if (empty || item == null) {
+                setText(null);
+                return;
+            }
+            String text = "[" + item.state + "] " + item.path.getFileName();
+            if (item.state == FileTask.State.FAILED && !item.message.isEmpty()) {
+                text += " — " + item.message;
+            }
+            setText(text);
+        }
     }
 
     /// Launches the JavaFX app.
