@@ -1,7 +1,6 @@
 # AGENTS.md — coding guardrails for x3-java
 
 This repo is the **X3 / `.SUD` decode library** (`edu.cornell.raven.core.audio.x3a`).  
-Architecture and phases: [`development-plan.md`](development-plan.md).
 
 ## Non-negotiables
 

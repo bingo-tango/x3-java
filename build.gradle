@@ -30,9 +30,9 @@ javadoc {
     }
 }
 
-// Phase 6: minimal JavaFX drag-and-drop verification app — test scaffolding, not
+// Minimal JavaFX drag-and-drop verification app — test scaffolding, not
 // library code. Its own source set keeps JavaFX out of main's dependencies and
-// out of module-info.java (see development-plan.md Phase 6).
+// out of module-info.java
 sourceSets {
     tools {
         java {
@@ -51,7 +51,7 @@ javafx {
 
 tasks.register('runTestApp', JavaExec) {
     group = 'application'
-    description = 'Runs the Phase 6 JavaFX drag-and-drop verification app (tools source set).'
+    description = 'Runs the JavaFX drag-and-drop verification app (tools source set).'
     mainClass = 'edu.cornell.raven.core.audio.x3a.tools.X3VerificationApp'
     // The javafx plugin only auto-wires --module-path/--add-modules onto the
     // application plugin's "run" task; this is a custom-named JavaExec task, so

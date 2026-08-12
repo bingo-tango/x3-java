@@ -32,7 +32,7 @@ class X3DecoderTest {
     }
 
     @Test
-    void metadata_exposesPhase1Config() throws Exception {
+    void metadata_exposesConfig() throws Exception {
         Path sud = tempDir.resolve("tiny.sud");
         Files.write(sud, new byte[256]);
 

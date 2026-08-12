@@ -94,7 +94,7 @@ class ChunkIndexTest {
     }
 
     /**
-     * Cross-checks the index against the same real SoundTrap fixture Phase 1 uses,
+     * Cross-checks the index against the same real SoundTrap fixture,
      * confirming the record header's sample-count field really does sum to
      * OceanInstruments' own reported total ({@code SampleCount="172813552"} in
      * {@code 7867.230815161432.log.xml}) once every record is walked.

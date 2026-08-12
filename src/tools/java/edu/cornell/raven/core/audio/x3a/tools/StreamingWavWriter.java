@@ -7,7 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 
 /**
- * Streaming 16-bit LE PCM RIFF/WAVE writer for the Phase 6 verification app.
+ * Streaming 16-bit LE PCM RIFF/WAVE writer for the verification app.
  * <p>
  * Writes a 44-byte header with placeholder sizes, appends PCM as each decode
  * window arrives via {@link #writeFrames}, and back-patches the RIFF/data chunk
@@ -15,8 +15,7 @@ import java.nio.file.Path;
  * whole PCM buffer up front), this lets the caller stream a {@code .SUD} file's
  * windowed decode loop directly to disk without buffering the entire file.
  * <p>
- * Test scaffolding only — not the production encode path (see development-plan.md
- * Phase 6 / §1 scope boundary).
+ * Test scaffolding only — not the production encode path
  */
 final class StreamingWavWriter implements Closeable {
 

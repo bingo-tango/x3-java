@@ -119,9 +119,7 @@ The codec was reverse-engineered against a real SoundTrap fixture (no vendor
 spec was available) and cross-validated against OceanInstruments' own export
 tooling and the public `x3-rust` reference implementation (vendored locally
 under `x3-rust/` for comparison, not part of this build).
-Full phase-by-phase implementation notes live in
-[`development-plan.md`](development-plan.md) and [`progress.md`](progress.md);
-hard performance rules for anyone touching decode/parse/math paths are in
+Hard performance rules for anyone touching decode/parse/math paths are in
 [`AGENTS.md`](AGENTS.md).
 
 **Package layout:**
@@ -152,11 +150,6 @@ used standalone on bare `.x3a` archives without any SUD-container concept.
   process-wide `Semaphore` limits (`ChunkPipeline` for `.SUD`, the parallel
   path in `X3Files.decodeArchive` for bare `.x3a`).
 
-**Status:** Phases 1–4 (file mapping, chunk indexing, bitstream/audio codec,
-parallel pipeline) and Phase 6 (JavaFX drag-and-drop verification app) are
-complete; Phase 5 (upstream integration design) was explicitly skipped as a
-docs-only phase not implemented in this repo. See `progress.md` for detailed
-write-ups, empirical format notes, and benchmark numbers per phase.
 
 ## Project layout
 
