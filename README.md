@@ -60,10 +60,10 @@ not part of the library API and isn't exported from the Java module.
 ```bash
 ./gradlew jmh                                        # all JMH microbenchmarks
 ./gradlew jmh -Pjmh.includes=.*BitstreamReader.*      # filter to one benchmark
-./gradlew conversionBenchmark                         # paper-suite wav<->x3a throughput, CSV output
+./gradlew conversionBenchmark                         # wav<->x3a throughput, CSV output similar to x3-rust benchmark
 ```
 
-`conversionBenchmark` runs the same six-file "paper suite" (`GI16`, `GI60`,
+`conversionBenchmark` runs the same six-file suite (`GI16`, `GI60`,
 `GR48`, `LI192`, `NO96`, `PI240`) used throughout development to track
 encode/decode MB/s and compression ratio.
 
@@ -138,8 +138,8 @@ Hard performance rules for anyone touching decode/parse/math paths are in
 
 | Package | Role |
 | --- | --- |
-| `edu.cornell.raven.core.audio.x3a` | Codec + pipeline: `BitstreamReader`/`Writer`, `X3AudioDecoder`/`Encoder`, `ChunkPipeline`, `X3Files` (wav↔x3a conversion) |
-| `edu.cornell.raven.core.audio.x3a.sud` | `.SUD` container: `SudFileMapper`, `ChunkIndex`, `FileMetadata`, `TelemetryCallback`, facade `X3Decoder` |
+| `edu.cornell.raven.x3a` | Codec + pipeline: `BitstreamReader`/`Writer`, `X3AudioDecoder`/`Encoder`, `ChunkPipeline`, `X3Files` (wav↔x3a conversion) |
+| `edu.cornell.raven.sud` | `.SUD` container: `SudFileMapper`, `ChunkIndex`, `FileMetadata`, `TelemetryCallback`, facade `X3Decoder` |
 
 Dependency direction is one-way (`.sud` → core `x3a`), so the codec can be
 used standalone on bare `.x3a` archives without any SUD-container concept.
@@ -168,9 +168,9 @@ used standalone on bare `.x3a` archives without any SUD-container concept.
 ```
 src/main/java   library source (the two exported packages above)
 src/test/java   unit + fixture-integration tests
-src/jmh/java    JMH microbenchmarks + the wav<->x3a paper-suite benchmark
+src/jmh/java    JMH microbenchmarks + the wav<->x3a benchmark
 src/tools/java  JavaFX verification app (not part of the library, not exported)
-test/           paper-suite wav/x3a/flac fixtures used by benchmarks
+test/           wav/x3a/flac fixtures used by benchmarks
 x3-rust/        reference Rust implementation, used for cross-validation only
 ```
 
