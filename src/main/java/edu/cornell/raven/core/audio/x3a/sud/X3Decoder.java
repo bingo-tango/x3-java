@@ -1,8 +1,10 @@
 package edu.cornell.raven.core.audio.x3a.sud;
 
-import edu.cornell.raven.core.audio.x3a.ChunkPipeline;
-import edu.cornell.raven.core.audio.x3a.DecodeOptions;
+import edu.cornell.raven.core.audio.x3a.internal.ChunkIndex;
+import edu.cornell.raven.core.audio.x3a.internal.ChunkPipeline;
+import edu.cornell.raven.core.audio.x3a.internal.DecodeOptions;
 import edu.cornell.raven.core.audio.x3a.X3AudioDecoder;
+import edu.cornell.raven.core.audio.x3a.internal.RecordHeader;
 
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Path;

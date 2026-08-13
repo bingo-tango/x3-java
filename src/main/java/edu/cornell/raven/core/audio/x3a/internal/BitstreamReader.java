@@ -1,4 +1,4 @@
-package edu.cornell.raven.core.audio.x3a;
+package edu.cornell.raven.core.audio.x3a.internal;
 
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;

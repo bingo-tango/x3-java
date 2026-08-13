@@ -1,5 +1,7 @@
 package edu.cornell.raven.core.audio.x3a.sud;
 
+import edu.cornell.raven.core.audio.x3a.internal.RecordHeader;
+
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -47,7 +49,7 @@ import java.util.regex.Pattern;
 /// file next to a decoded WAV) can simply `Files.writeString(path, metadata.xmlConfig())`.
 public final class SudFileMapper implements AutoCloseable {
 
-    static final long SYNC_SEARCH_WINDOW = 65_536L;
+    public static final long SYNC_SEARCH_WINDOW = 65_536L;
 
     private static final Pattern CFG_TAG = Pattern.compile("<CFG\\b");
 

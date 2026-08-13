@@ -1,4 +1,4 @@
-package edu.cornell.raven.core.audio.x3a;
+package edu.cornell.raven.core.audio.x3a.internal;
 
 /// CRC-16 (XMODEM/CCITT, poly `0x1021`) matching x3-rust / x3new.m, so archive and frame
 /// checksums produced here validate against the reference tooling.

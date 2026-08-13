@@ -1,5 +1,7 @@
 package edu.cornell.raven.core.audio.x3a;
 
+import edu.cornell.raven.core.audio.x3a.internal.*;
+
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;

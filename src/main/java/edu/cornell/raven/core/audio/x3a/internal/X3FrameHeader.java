@@ -1,4 +1,4 @@
-package edu.cornell.raven.core.audio.x3a;
+package edu.cornell.raven.core.audio.x3a.internal;
 
 /// 20-byte big-endian frame header prefixing every frame in an X3 archive (`.x3a`) —
 /// the "x3" key plus header/payload CRCs let [X3Files#decodeArchive(byte[])] detect a
@@ -107,7 +107,7 @@ public final class X3FrameHeader {
         }
     }
 
-    static int getBe16(byte[] b, int off) {
+    public static int getBe16(byte[] b, int off) {
         return ((b[off] & 0xff) << 8) | (b[off + 1] & 0xff);
     }
 

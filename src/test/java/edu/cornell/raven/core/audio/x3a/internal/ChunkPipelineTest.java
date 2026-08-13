@@ -1,5 +1,6 @@
-package edu.cornell.raven.core.audio.x3a;
+package edu.cornell.raven.core.audio.x3a.internal;
 
+import edu.cornell.raven.core.audio.x3a.X3AudioDecoder;
 import org.junit.jupiter.api.Test;
 
 import java.lang.foreign.Arena;

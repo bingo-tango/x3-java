@@ -1,4 +1,6 @@
-package edu.cornell.raven.core.audio.x3a.sud;
+package edu.cornell.raven.core.audio.x3a.internal;
+
+import edu.cornell.raven.core.audio.x3a.sud.SudFileMapper;
 
 import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
@@ -12,7 +14,7 @@ import java.nio.ByteOrder;
 ///
 /// Factored out of [SudFileMapper] so [ChunkIndex]'s record walk shares this
 /// framing instead of re-deriving it and risking drift between the two.
-final class RecordHeader {
+public final class RecordHeader {
 
     static final MemoryLayout LAYOUT = MemoryLayout.structLayout(
             ValueLayout.JAVA_SHORT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN).withName("sync"),
@@ -21,7 +23,7 @@ final class RecordHeader {
             ValueLayout.JAVA_SHORT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN).withName("recordType"),
             MemoryLayout.sequenceLayout(12, ValueLayout.JAVA_BYTE).withName("opaqueTail"));
 
-    static final long BYTES = LAYOUT.byteSize();
+    public static final long BYTES = LAYOUT.byteSize();
 
     private static final VarHandle PAYLOAD_LENGTH =
             LAYOUT.varHandle(MemoryLayout.PathElement.groupElement("payloadLength"));
@@ -41,28 +43,28 @@ final class RecordHeader {
     private RecordHeader() {
     }
 
-    static boolean hasSyncAt(MemorySegment segment, long pos) {
+    public static boolean hasSyncAt(MemorySegment segment, long pos) {
         return segment.get(ValueLayout.JAVA_BYTE, pos) == SYNC_BYTE_0
                 && segment.get(ValueLayout.JAVA_BYTE, pos + 1) == SYNC_BYTE_1;
     }
 
-    static int payloadLength(MemorySegment segment, long pos) {
+    public static int payloadLength(MemorySegment segment, long pos) {
         return Short.toUnsignedInt((short) PAYLOAD_LENGTH.get(segment, pos));
     }
 
     /// `1` for metadata/event records; for audio chunks, the decoded sample count
     /// carried in this chunk.
-    static int sampleCountOrRecordType(MemorySegment segment, long pos) {
+    public static int sampleCountOrRecordType(MemorySegment segment, long pos) {
         return Short.toUnsignedInt((short) RECORD_TYPE.get(segment, pos));
     }
 
-    static boolean isMetadata(int sampleCountOrRecordType) {
+    public static boolean isMetadata(int sampleCountOrRecordType) {
         return sampleCountOrRecordType == METADATA_RECORD_TYPE;
     }
 
     /// Scans forward from byte 0 for the first `0x52, 0xA9` sync marker within
     /// `limit` bytes, returning `-1` if none is found.
-    static long findFirstSync(MemorySegment segment, long limit) {
+    public static long findFirstSync(MemorySegment segment, long limit) {
         for (long i = 0; i + 2 <= limit; i++) {
             if (hasSyncAt(segment, i)) {
                 return i;

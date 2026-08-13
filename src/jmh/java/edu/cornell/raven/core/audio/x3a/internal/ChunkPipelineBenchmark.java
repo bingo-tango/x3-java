@@ -1,5 +1,6 @@
-package edu.cornell.raven.core.audio.x3a;
+package edu.cornell.raven.core.audio.x3a.internal;
 
+import edu.cornell.raven.core.audio.x3a.X3AudioDecoder;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;

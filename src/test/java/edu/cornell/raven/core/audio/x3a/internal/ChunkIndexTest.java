@@ -1,5 +1,7 @@
-package edu.cornell.raven.core.audio.x3a.sud;
+package edu.cornell.raven.core.audio.x3a.internal;
 
+import edu.cornell.raven.core.audio.x3a.sud.FileMetadata;
+import edu.cornell.raven.core.audio.x3a.sud.SudFileMapper;
 import org.junit.jupiter.api.Test;
 
 import java.lang.foreign.Arena;

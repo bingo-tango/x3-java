@@ -1,4 +1,4 @@
-package edu.cornell.raven.core.audio.x3a;
+package edu.cornell.raven.core.audio.x3a.internal;
 
 /// MSB-first variable-bit writer, mirroring [BitstreamReader]'s bit order.
 ///

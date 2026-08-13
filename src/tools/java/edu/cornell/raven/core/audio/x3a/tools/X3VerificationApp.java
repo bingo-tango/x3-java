@@ -1,6 +1,7 @@
 package edu.cornell.raven.core.audio.x3a.tools;
 
 import edu.cornell.raven.core.audio.x3a.X3Files;
+import edu.cornell.raven.core.audio.x3a.internal.DecodeOptions;
 import edu.cornell.raven.core.audio.x3a.sud.FileMetadata;
 import edu.cornell.raven.core.audio.x3a.sud.X3Decoder;
 
@@ -50,7 +51,7 @@ public final class X3VerificationApp extends Application {
 
     /// Batch drops fan every file out to a virtual thread immediately, but at most this
     /// many are ever mid-conversion at once — a whole-file decode is much heavier than the
-    /// per-chunk work [edu.cornell.raven.core.audio.x3a.DecodeOptions]'s shared limiter gates.
+    /// per-chunk work [DecodeOptions]'s shared limiter gates.
     private static final int MAX_PARALLEL_FILES = 4;
 
     private final ExecutorService conversions = Executors.newVirtualThreadPerTaskExecutor();

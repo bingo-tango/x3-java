@@ -1,9 +1,18 @@
 # x3-java
 
-A pure-Java decoder (and encoder) for the **X3** lossless acoustic codec used by
-Ocean Instruments **SoundTrap** recorders, including their `.SUD` container
-format. Targets JDK 25, built around the Foreign Function & Memory API,
+A pure-Java decoder (and encoder) for the **X3** lossless acoustic codec. X3 is the lossless compression algorithm
+used by Ocean Instruments **SoundTrap** recorders in their `.SUD` container
+format. 
+
+The X3 algorithm was originally described in this paper: 
+
+Mark Johnson, Jim Partan, Tom Hurst; Low complexity lossless compression of underwater sound recordings. 
+J. Acoust. Soc. Am. 1 March 2013; 133 (3): 1387–1398. 
+https://doi.org/10.1121/1.4776206
+
+This implementation targets JDK 25, built around the Foreign Function & Memory API,
 virtual threads, and allocation-free hot paths — no JNI, no native libraries.
+
 
 ## Requirements
 

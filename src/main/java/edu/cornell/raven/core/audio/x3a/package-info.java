@@ -8,3 +8,5 @@
 /// hosts (see the `...sud` package); they take a flattened index table rather than
 /// any container-specific type, keeping this package free of SUD framing.
 package edu.cornell.raven.core.audio.x3a;
+
+import edu.cornell.raven.core.audio.x3a.internal.*;

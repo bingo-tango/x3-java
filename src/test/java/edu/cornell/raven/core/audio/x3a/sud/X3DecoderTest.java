@@ -1,6 +1,6 @@
 package edu.cornell.raven.core.audio.x3a.sud;
 
-import edu.cornell.raven.core.audio.x3a.DecodeOptions;
+import edu.cornell.raven.core.audio.x3a.internal.DecodeOptions;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

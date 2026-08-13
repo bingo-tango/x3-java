@@ -1,5 +1,8 @@
 package edu.cornell.raven.core.audio.x3a;
 
+import edu.cornell.raven.core.audio.x3a.internal.BitstreamReader;
+import edu.cornell.raven.core.audio.x3a.internal.ChunkPipeline;
+
 import java.lang.foreign.MemorySegment;
 
 /// Unpacks X3V2 predictive audio (RICE0/1/3 + BFP block coding, diff filter) into a

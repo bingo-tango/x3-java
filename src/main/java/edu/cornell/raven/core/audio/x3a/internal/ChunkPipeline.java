@@ -1,4 +1,6 @@
-package edu.cornell.raven.core.audio.x3a;
+package edu.cornell.raven.core.audio.x3a.internal;
+
+import edu.cornell.raven.core.audio.x3a.X3AudioDecoder;
 
 import java.lang.foreign.MemorySegment;
 import java.util.ArrayList;

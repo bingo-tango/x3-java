@@ -1,5 +1,6 @@
 package edu.cornell.raven.core.audio.x3a;
 
+import edu.cornell.raven.core.audio.x3a.internal.BitstreamWriter;
 import org.junit.jupiter.api.Test;
 
 import java.lang.foreign.Arena;

@@ -1,5 +1,7 @@
 package edu.cornell.raven.core.audio.x3a;
 
+import edu.cornell.raven.core.audio.x3a.internal.BitstreamWriter;
+
 /// X3V2 frame encoder (diff predictor + RICE0/1/3 + BFP), producing payloads
 /// [X3AudioDecoder] can unpack bit-for-bit.
 ///
