@@ -77,8 +77,8 @@ container + facade) — the only two packages exported by the JPMS module
 ### Decoding a `.SUD` file
 
 ```java
-import edu.cornell.raven.core.audio.x3a.sud.X3Decoder;
-import edu.cornell.raven.core.audio.x3a.sud.FileMetadata;
+import sud.edu.cornell.raven.x3a.X3Decoder;
+import sud.edu.cornell.raven.x3a.FileMetadata;
 
 try (X3Decoder decoder = new X3Decoder(Path.of("recording.sud"))) {
     FileMetadata meta = decoder.metadata();     // sampleRate(), channels(), bitDepth(), xmlConfig()
@@ -102,7 +102,7 @@ on the steady-state path.
 ### Converting `.wav` ↔ `.x3a`
 
 ```java
-import edu.cornell.raven.core.audio.x3a.X3Files;
+import edu.cornell.raven.x3a.X3Files;
 
 X3Files.wavToX3a(Path.of("in.wav"), Path.of("out.x3a"));
 X3Files.x3aToWav(Path.of("out.x3a"), Path.of("roundtrip.wav"));
