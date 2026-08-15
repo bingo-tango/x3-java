@@ -1,6 +1,5 @@
 package edu.cornell.raven.x3a;
 
-import edu.cornell.raven.core.audio.x3a.internal.*;
 import edu.cornell.raven.x3a.internal.*;
 
 import java.io.ByteArrayOutputStream;

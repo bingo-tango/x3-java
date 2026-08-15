@@ -9,5 +9,4 @@
 /// any container-specific type, keeping this package free of SUD framing.
 package edu.cornell.raven.x3a;
 
-import edu.cornell.raven.core.audio.x3a.internal.*;
 import edu.cornell.raven.x3a.internal.*;
