@@ -69,8 +69,8 @@ encode/decode MB/s and compression ratio.
 
 ## Usage
 
-The public API lives in two packages: `edu.cornell.raven.core.audio.x3a`
-(codec/pipeline) and `edu.cornell.raven.core.audio.x3a.sud` (the `.SUD`
+The public API lives in two packages: `edu.cornell.raven.x3a`
+(codec/pipeline) and `edu.cornell.raven.x3a.sud` (the `.SUD`
 container + facade) — the only two packages exported by the JPMS module
 (`src/main/java/module-info.java`).
 

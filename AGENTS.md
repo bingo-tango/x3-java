@@ -1,6 +1,6 @@
 # AGENTS.md — coding guardrails for x3-java
 
-This repo is the **X3 / `.SUD` decode library** (`edu.cornell.raven.core.audio.x3a`).  
+This repo is the **X3 / `.SUD` decode library** (`edu.cornell.raven.x3a`).  
 
 ## General guidelines
 
@@ -9,7 +9,7 @@ This repo is the **X3 / `.SUD` decode library** (`edu.cornell.raven.core.audio.x
 ## Non-negotiables
 
 * **No `libsndfile` (or other native encode/export) implementation in this repo.** Upstream applications own FFM writers and FLAC/WAV paths. Document integration only; do not add writer types under `src/`.
-* **SUD container types live under `edu.cornell.raven.core.audio.x3a.sud` only.** Codec/pipeline types stay in `edu.cornell.raven.core.audio.x3a`. Dependency direction: `.sud` → core `x3a`, never the reverse.
+* **SUD container types live under `edu.cornell.raven.x3a.sud` only.** Codec/pipeline types stay in `edu.cornell.raven.x3a`. Dependency direction: `.sud` → core `x3a`, never the reverse.
 
 ## Performance rules (hard)
 
