@@ -66,6 +66,7 @@ public class ConversionBenchmark {
 
         Path wav;
         Path x3a;
+        Path flacOut;
         long wavBytes;
 
         @Setup(Level.Trial)
@@ -77,13 +78,18 @@ public class ConversionBenchmark {
                                 + " — place the paper suite under ./test");
             }
             x3a = TEST_DIR.resolve(file + ".jmh.x3a");
+            flacOut = TEST_DIR.resolve(file + ".jmh.flac");
             wavBytes = Files.size(wav);
             WAV_BYTES.put(file, wavBytes);
         }
 
         @TearDown(Level.Trial)
         public void tearDown() throws IOException {
+            // Record compressed sizes after the trial so the benchmark body stays clean.
+            if (Files.exists(x3a))    X3A_BYTES.put(file,          Files.size(x3a));
+            if (Files.exists(flacOut)) X3A_BYTES.put(file + ".flac", Files.size(flacOut));
             Files.deleteIfExists(x3a);
+            Files.deleteIfExists(flacOut);
         }
     }
 
@@ -120,20 +126,85 @@ public class ConversionBenchmark {
         }
     }
 
-    /// Encode side of the round trip.
-    @Benchmark
-    public long wav_to_x3a(EncodeInput in) throws Exception {
-        X3Files.wav_to_x3a(in.wav, in.x3a);
-        long out = Files.size(in.x3a);
-        X3A_BYTES.put(in.file, out);
-        return out;
+    /// Input state for the FLAC decode benchmark. Encodes WAV -> FLAC once (untimed)
+    /// so that `flac_to_wav` measures only the decode pass.
+    @State(Scope.Thread)
+    public static class FlacDecodeInput {
+        @Param({"GI16", "GI60", "GR48", "LI192", "NO96", "PI240"})
+        public String file;
+
+        Path flac;
+        Path wavOut;
+        long flacBytes;
+
+        @Setup(Level.Trial)
+        public void setup() throws Exception {
+            Path wav = TEST_DIR.resolve(file + ".wav");
+            if (!Files.isRegularFile(wav)) {
+                throw new IllegalStateException(
+                        "Missing benchmark WAV: " + wav.toAbsolutePath()
+                                + " — place the paper suite under ./test");
+            }
+            WAV_BYTES.putIfAbsent(file, Files.size(wav));
+            flac = TEST_DIR.resolve(file + ".jmh_pre.flac");
+            wavOut = TEST_DIR.resolve(file + ".jmh_from_flac.wav");
+            // Untimed encode so the benchmark measures flac_to_wav only.
+            ProcessBuilder pb = new ProcessBuilder("flac", wav.toString(), "-o", flac.toString(), "-f", "--silent");
+            Process p = pb.start();
+            int exitCode;
+            try {
+                exitCode = p.waitFor();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted while encoding FLAC fixture", e);
+            }
+            if (exitCode != 0) {
+                String err = new String(p.getErrorStream().readAllBytes());
+                throw new IOException("FLAC fixture encode failed (exit " + exitCode + "): " + err);
+            }
+            flacBytes = Files.size(flac);
+            X3A_BYTES.put(file + ".flac", flacBytes);
+        }
+
+        @TearDown(Level.Trial)
+        public void tearDown() throws IOException {
+            Files.deleteIfExists(flac);
+            Files.deleteIfExists(wavOut);
+        }
     }
 
-    /// Decode side of the round trip.
+    /// Encode side of the round trip (WAV -> X3A).
     @Benchmark
-    public long x3a_to_wav(DecodeInput in) throws Exception {
+    public void wav_to_x3a(EncodeInput in) throws Exception {
+        X3Files.wav_to_x3a(in.wav, in.x3a);
+    }
+
+    /// Encode side of the round trip (WAV -> FLAC). Requires `flac` CLI on PATH.
+    @Benchmark
+    public void wav_to_flac(EncodeInput in) throws IOException, InterruptedException {
+        ProcessBuilder pb = new ProcessBuilder(
+                "flac", in.wav.toString(), "-o", in.flacOut.toString(), "-f", "--silent");
+        int exitCode = pb.start().waitFor();
+        if (exitCode != 0) {
+            throw new IOException("flac encode failed (exit " + exitCode + ") for " + in.file);
+        }
+    }
+
+/// Decode side of the round trip (X3A -> WAV).
+    @Benchmark
+    public void x3a_to_wav(DecodeInput in) throws Exception {
         X3Files.x3a_to_wav(in.x3a, in.wavOut);
-        return Files.size(in.wavOut);
+    }
+
+    /// Decode side of the round trip (FLAC -> WAV). Requires `flac` CLI on PATH.
+    @Benchmark
+    public void flac_to_wav(FlacDecodeInput in) throws IOException, InterruptedException {
+        ProcessBuilder pb = new ProcessBuilder(
+                "flac", "--decode", in.flac.toString(), "-o", in.wavOut.toString(), "-f", "--silent");
+        int exitCode = pb.start().waitFor();
+        if (exitCode != 0) {
+            throw new IOException("flac decode failed (exit " + exitCode + ") for " + in.file);
+        }
     }
 
     /// Standalone entry: runs this class with minimal single-shot settings and prints
@@ -169,7 +240,7 @@ public class ConversionBenchmark {
     }
 
     private static void printCsv(Collection<RunResult> results) throws IOException {
-        // file -> (encSec, decSec)
+        // file -> (wav_to_x3a, wav_to_flac, x3a_to_wav, flac_to_wav)
         Map<String, double[]> times = new LinkedHashMap<>();
         for (RunResult rr : results) {
             String bench = rr.getParams().getBenchmark();
@@ -178,11 +249,16 @@ public class ConversionBenchmark {
                 continue;
             }
             double sec = rr.getPrimaryResult().getScore();
-            double[] t = times.computeIfAbsent(file, k -> new double[] {Double.NaN, Double.NaN});
+            // Initialize time array with 4 slots: x3a(0), flac(1), x3a_dec(2), flac_dec(3)
+            double[] t = times.computeIfAbsent(file, k -> new double[] {Double.NaN, Double.NaN, Double.NaN, Double.NaN});
             if (bench.endsWith(".wav_to_x3a")) {
                 t[0] = sec;
-            } else if (bench.endsWith(".x3a_to_wav")) {
+            } else if (bench.endsWith(".wav_to_flac")) {
                 t[1] = sec;
+            } else if (bench.endsWith(".x3a_to_wav")) {
+                t[2] = sec;
+            } else if (bench.endsWith(".flac_to_wav")) {
+                t[3] = sec;
             }
         }
 
@@ -190,46 +266,83 @@ public class ConversionBenchmark {
         files.sort(Comparator.naturalOrder());
 
         System.out.println();
+        // New CSV header to reflect the new benchmarks: WAV->X3A, WAV->FLAC, X3A->WAV, FLAC->WAV
         System.out.println("File,Algorithm,File Size (B),Time,Max Mem Usage (kB),Compressed Size (B)");
 
         long totalWav = 0;
         long totalX3a = 0;
-        double totalEnc = 0;
-        double totalDec = 0;
+        double totalEnc_x3a = 0;
+        double totalEnc_flac = 0;
+        double totalDec_x3a = 0;
+        double totalDec_flac = 0;
+        long totalFlac = 0;      // sum of compressed FLAC sizes (for ratio)
+        long totalWavFlac = 0;   // sum of WAV sizes for files where FLAC ran (may differ from totalWav if not all files ran)
 
         for (String file : files) {
             long wavBytes = sizeOrFile(file, WAV_BYTES);
             long x3aBytes = X3A_BYTES.getOrDefault(file, 0L);
-            double enc = times.get(file)[0];
-            if (!Double.isNaN(enc)) {
+            long flacBytes = X3A_BYTES.getOrDefault(file + ".flac", 0L);
+
+            // WAV -> X3A (Index 0)
+            double enc_x3a = times.get(file)[0];
+            if (!Double.isNaN(enc_x3a)) {
                 System.out.println(file + ".wav,wav_to_x3a," + wavBytes + ","
-                        + formatTime(enc) + ",0," + x3aBytes);
+                        + formatTime(enc_x3a) + ",0," + x3aBytes);
                 totalWav += wavBytes;
                 totalX3a += x3aBytes;
-                totalEnc += enc;
+                totalEnc_x3a += enc_x3a;
             }
-        }
-        for (String file : files) {
-            long wavBytes = sizeOrFile(file, WAV_BYTES);
-            long x3aBytes = X3A_BYTES.getOrDefault(file, 0L);
-            double dec = times.get(file)[1];
-            if (!Double.isNaN(dec)) {
+
+            // WAV -> FLAC (Index 1)
+            double enc_flac = times.get(file)[1];
+            if (!Double.isNaN(enc_flac)) {
+                System.out.println(file + ".wav,wav_to_flac," + wavBytes + ","
+                        + formatTime(enc_flac) + ",0," + flacBytes);
+                totalEnc_flac += enc_flac;
+                totalFlac += flacBytes;
+                totalWavFlac += wavBytes;
+            }
+
+            // X3A -> WAV (Index 2)
+            double dec_x3a = times.get(file)[2];
+            if (!Double.isNaN(dec_x3a)) {
                 System.out.println(file + ".x3a,x3a_to_wav," + x3aBytes + ","
-                        + formatTime(dec) + ",0," + wavBytes);
-                totalDec += dec;
+                        + formatTime(dec_x3a) + ",0," + wavBytes);
+                totalDec_x3a += dec_x3a;
+            }
+
+            // FLAC -> WAV (Index 3)
+            double dec_flac = times.get(file)[3];
+            if (!Double.isNaN(dec_flac)) {
+                System.out.println(file + ".flac,flac_to_wav," + flacBytes + ","
+                        + formatTime(dec_flac) + ",0," + wavBytes);
+                totalDec_flac += dec_flac;
             }
         }
 
         System.out.println();
         System.out.println("Algorithm,Compression ratio,Compression speed (MB/s),Decompression speed (MB/s)");
-        if (totalWav > 0 && totalEnc > 0 && totalDec > 0) {
+
+        // Summary for x3a conversion
+        if (totalWav > 0 && totalEnc_x3a > 0) {
             double ratio = totalX3a / (double) totalWav;
-            double encMibs = mibPerSec(totalWav, totalEnc);
-            double decMibs = mibPerSec(totalWav, totalDec);
-            System.out.println("x3a," + formatRatio(ratio) + "," + formatRatio(encMibs) + ","
-                    + formatRatio(decMibs));
+            double encMibs_x3a = mibPerSec(totalWav, totalEnc_x3a);
+            double decMibs_x3a = mibPerSec(totalWav, totalDec_x3a);
+            System.out.println("x3a," + formatRatio(ratio) + "," + formatRatio(encMibs_x3a) + ","
+                    + formatRatio(decMibs_x3a));
         } else {
             System.out.println("x3a,n/a,,");
+        }
+
+        // Summary for FLAC conversion (Compression speed = WAV->FLAC, Decompression speed = FLAC->WAV)
+        if (totalWavFlac > 0 && totalEnc_flac > 0 && totalDec_flac > 0) {
+            double ratio_flac = totalFlac / (double) totalWavFlac;
+            double encMibs_flac = mibPerSec(totalWavFlac, totalEnc_flac);
+            double decMibs_flac = mibPerSec(totalWavFlac, totalDec_flac);
+            System.out.println("flac," + formatRatio(ratio_flac) + ","
+                    + formatRatio(encMibs_flac) + "," + formatRatio(decMibs_flac));
+        } else {
+            System.out.println("flac,n/a,,");
         }
     }
 
