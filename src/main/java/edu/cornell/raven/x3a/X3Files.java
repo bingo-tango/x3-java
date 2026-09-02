@@ -1,6 +1,7 @@
 package edu.cornell.raven.x3a;
 
 import edu.cornell.raven.x3a.internal.*;
+import edu.cornell.raven.x3a.sud.SudFileMapper;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -37,6 +38,138 @@ public final class X3Files {
             Pattern.CASE_INSENSITIVE);
 
     private X3Files() {
+    }
+
+    /// Quick metadata-only read without decoding PCM samples.
+    /// Extracts sample rate, channels, bit depth, frame count, and device ID from a `.x3a` file.
+    /// Works with both SUD-wrapped and plain X3 archives. Prefers SUD metadata when available.
+    /// Use this instead of [#decodeArchive(byte[])] when you only need format information.
+    public static X3Header readHeader(Path path) throws Exception {
+        byte[] archive = Files.readAllBytes(path);
+
+        // Check if this is a plain X3 archive (starts with X3ARCHIV)
+        if (startsWithX3Archive(archive)) {
+            // Parse X3 archive's embedded XML config
+            return readHeaderFromArchiveXml(archive);
+        }
+
+        // Otherwise try SUD metadata (for SoundTrap SUD files)
+        try (SudFileMapper mapper = new SudFileMapper(path)) {
+            edu.cornell.raven.x3a.sud.FileMetadata sudMetadata = mapper.parseHeader();
+            long frameCount = getFrameCountFromArchive(archive);
+            return new X3Header(sudMetadata.sampleRate(), sudMetadata.channels(), sudMetadata.bitDepth(),
+                    frameCount, sudMetadata.deviceId());
+        }
+    }
+
+    private static boolean startsWithX3Archive(byte[] data) {
+        return data.length >= X3FrameHeader.ARCHIVE_ID.length &&
+               data[0] == X3FrameHeader.ARCHIVE_ID[0] &&
+               data[1] == X3FrameHeader.ARCHIVE_ID[1] &&
+               data[2] == X3FrameHeader.ARCHIVE_ID[2] &&
+               data[3] == X3FrameHeader.ARCHIVE_ID[3] &&
+               data[4] == X3FrameHeader.ARCHIVE_ID[4] &&
+               data[5] == X3FrameHeader.ARCHIVE_ID[5] &&
+               data[6] == X3FrameHeader.ARCHIVE_ID[6] &&
+               data[7] == X3FrameHeader.ARCHIVE_ID[7];
+    }
+
+    /// Extracts metadata from a plain X3 archive's embedded XML config without decoding PCM.
+    private static X3Header readHeaderFromArchiveXml(byte[] archive) {
+        if (archive.length < X3FrameHeader.ARCHIVE_ID.length + X3FrameHeader.LENGTH) {
+            return new X3Header(0, 0, 0, 0, "UNKNOWN");
+        }
+        for (int i = 0; i < X3FrameHeader.ARCHIVE_ID.length; i++) {
+            if (archive[i] != X3FrameHeader.ARCHIVE_ID[i]) {
+                return new X3Header(0, 0, 0, 0, "UNKNOWN");
+            }
+        }
+
+        int pos = X3FrameHeader.ARCHIVE_ID.length;
+        X3FrameHeader xmlHdr = X3FrameHeader.decode(archive, pos);
+        pos += X3FrameHeader.LENGTH;
+        if (pos + xmlHdr.payloadLen > archive.length) {
+            return new X3Header(0, 0, 0, 0, "UNKNOWN");
+        }
+        String xml = new String(archive, pos, xmlHdr.payloadLen, StandardCharsets.US_ASCII);
+
+        int sampleRate = parseInt(FS, xml, -1);
+        int channels = -1;
+        int bitDepth = -1;
+        long frameCount = getFrameCountFromArchive(archive);
+
+        // For X3 archives created from WAV, channels are determined from the first data frame
+        pos += xmlHdr.payloadLen;
+        while (pos + X3FrameHeader.LENGTH <= archive.length) {
+            int key = X3FrameHeader.getBe16(archive, pos);
+            if (key != X3FrameHeader.KEY) {
+                break;
+            }
+            X3FrameHeader fh = X3FrameHeader.decode(archive, pos);
+            pos += X3FrameHeader.LENGTH;
+            if (fh.payloadLen <= 0 || pos + fh.payloadLen > archive.length) {
+                break;
+            }
+            if (fh.samples > 0) {
+                channels = Math.max(1, fh.channels);
+                bitDepth = 16; // X3 archives always encode 16-bit PCM
+                break;
+            }
+            pos += fh.payloadLen;
+        }
+
+        if (sampleRate < 0) sampleRate = 0;
+        if (channels < 0) channels = 0;
+        if (bitDepth < 0) bitDepth = 0;
+
+        return new X3Header(sampleRate, channels, bitDepth, frameCount, "UNKNOWN");
+    }
+
+    /// Returns the frame count (total audio samples / channel) without decoding the PCM payload.
+    /// More efficient than [#decodeArchive(byte[])] for format detection when you only need frame count.
+    public static long getFrameCount(Path path) throws IOException {
+        byte[] archive = Files.readAllBytes(path);
+        return getFrameCountFromArchive(archive);
+    }
+
+    /// Extracts frame count from an in-memory archive image without decoding samples.
+    private static long getFrameCountFromArchive(byte[] archive) {
+        if (archive.length < X3FrameHeader.ARCHIVE_ID.length + X3FrameHeader.LENGTH) {
+            return 0;
+        }
+        for (int i = 0; i < X3FrameHeader.ARCHIVE_ID.length; i++) {
+            if (archive[i] != X3FrameHeader.ARCHIVE_ID[i]) {
+                return 0;
+            }
+        }
+
+        int pos = X3FrameHeader.ARCHIVE_ID.length;
+        X3FrameHeader xmlHdr = X3FrameHeader.decode(archive, pos);
+        pos += X3FrameHeader.LENGTH;
+        if (pos + xmlHdr.payloadLen > archive.length) {
+            return 0;
+        }
+        pos += xmlHdr.payloadLen;
+
+        long totalSamples = 0;
+        while (pos + X3FrameHeader.LENGTH <= archive.length) {
+            int key = X3FrameHeader.getBe16(archive, pos);
+            if (key != X3FrameHeader.KEY) {
+                break;
+            }
+            X3FrameHeader fh = X3FrameHeader.decode(archive, pos);
+            pos += X3FrameHeader.LENGTH;
+            if (fh.payloadLen <= 0 || pos + fh.payloadLen > archive.length) {
+                break;
+            }
+
+            if (fh.samples > 0) {
+                totalSamples += fh.samples;
+            }
+            pos += fh.payloadLen;
+        }
+
+        return totalSamples;
     }
 
     /// Converts a 16-bit PCM WAV file to an X3 archive (`.x3a`). Overwrites `x3aPath` if it exists.
@@ -277,6 +410,22 @@ public final class X3Files {
             sharedLimiter.release();
         }
         localLimiter.release();
+    }
+
+    /// Metadata extracted from a `.x3a` file without decoding PCM samples.
+    /// Use [#readHeader(Path)] to efficiently extract this information.
+    public record X3Header(
+            /// Sample rate in Hz
+            int sampleRate,
+            /// Channel count
+            int channels,
+            /// Bits per sample
+            int bitDepth,
+            /// Total audio frames
+            long frames,
+            /// Device identifier from metadata, or "UNKNOWN"
+            String deviceId
+    ) {
     }
 
     /// Result of [#decodeArchive(byte[])]: interleaved PCM plus the stream metadata

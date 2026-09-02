@@ -129,8 +129,7 @@ oversubscribe CPU) — override via `-Dx3a.decode.maxConcurrency=N` /
 
 The codec was reverse-engineered against a real SoundTrap fixture (no vendor
 spec was available) and cross-validated against OceanInstruments' own export
-tooling and the public `x3-rust` reference implementation (vendored locally
-under `x3-rust/` for comparison, not part of this build).
+tooling and the public `x3-rust` reference implementation.
 Hard performance rules for anyone touching decode/parse/math paths are in
 [`AGENTS.md`](AGENTS.md).
 
