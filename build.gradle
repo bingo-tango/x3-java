@@ -53,6 +53,7 @@ tasks.register('runTestApp', JavaExec) {
     group = 'application'
     description = 'Runs the JavaFX drag-and-drop verification app (tools source set).'
     mainClass = 'edu.cornell.raven.x3a.tools.X3VerificationApp'
+    classpath = sourceSets.tools.runtimeClasspath
     // The javafx plugin only auto-wires --module-path/--add-modules onto the
     // application plugin's "run" task; this is a custom-named JavaExec task, so
     // split the javafx jars onto an explicit module path ourselves.
