@@ -37,12 +37,12 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
-/// Drag-and-drop verification app for the decoder. Dropping a single `.x3a` file
-/// converts it to `.wav` in place, unchanged from the original single-file flow.
-/// Dropping one or more `.SUD` files, or a folder, walks every dropped folder for
-/// `.SUD` files (recursively) and decodes the whole batch in parallel, showing
-/// overall progress plus a per-file status list. Each output `.wav` gets an `.xml`
-/// metadata sidecar next to it when recovered metadata is available.
+/// Drag-and-drop verification app for the codec. Dropping a single `.x3a` file
+/// converts it to `.wav` in place, and dropping a single `.wav` file encodes it
+/// to `.x3a` in place. Dropping one or more `.SUD` files, `.x3a` files, `.wav` files,
+/// or a folder, walks every dropped folder for supported files (recursively) and
+/// converts the whole batch in parallel, showing overall progress plus a per-file status list.
+/// Each output `.wav` gets an `.xml` metadata sidecar next to it when recovered metadata is available.
 ///
 /// Test scaffolding, not library code: no file chooser, no settings, no playback.
 public final class X3VerificationApp extends Application {
@@ -60,7 +60,7 @@ public final class X3VerificationApp extends Application {
     /// single-file status view and the batch progress view.
     @Override
     public void start(Stage stage) {
-        Label status = new Label("Drop a .SUD or .x3a file, multiple .SUD files, or a folder");
+        Label status = new Label("Drop a .SUD, .x3a, or .wav file, multiple files, or a folder");
         StackPane singleView = new StackPane(status);
         singleView.setAlignment(Pos.CENTER);
 
@@ -83,7 +83,7 @@ public final class X3VerificationApp extends Application {
         root.setOnDragDropped(event ->
                 onDragDropped(event, root, status, singleView, batchView, fileList, progressBar, progressLabel));
 
-        stage.setTitle("X3 Decoder Verification");
+        stage.setTitle("X3 Verification");
         stage.setScene(new Scene(root));
         stage.show();
     }
@@ -112,10 +112,11 @@ public final class X3VerificationApp extends Application {
         List<File> dropped = db.hasFiles() ? new ArrayList<>(db.getFiles()) : List.of();
         boolean accepted = !dropped.isEmpty() && dropped.stream().allMatch(X3VerificationApp::isDroppable);
         if (accepted) {
-            boolean singleX3a = dropped.size() == 1 && !dropped.getFirst().isDirectory()
-                    && "x3a".equals(extensionOf(dropped.getFirst().getName()));
+            boolean singleDirect = dropped.size() == 1 && !dropped.getFirst().isDirectory()
+                    && ("x3a".equals(extensionOf(dropped.getFirst().getName()))
+                    || "wav".equals(extensionOf(dropped.getFirst().getName())));
             root.setDisable(true);
-            if (singleX3a) {
+            if (singleDirect) {
                 Path input = dropped.getFirst().toPath();
                 status.setText("Converting " + input.getFileName() + "…");
                 conversions.submit(() -> runSingleConversion(input, root, status));
@@ -135,7 +136,7 @@ public final class X3VerificationApp extends Application {
 
     private static boolean isSupported(File file) {
         String ext = extensionOf(file.getName());
-        return "sud".equals(ext) || "x3a".equals(ext);
+        return "sud".equals(ext) || "x3a".equals(ext) || "wav".equals(ext);
     }
 
     private static String extensionOf(String name) {
@@ -145,10 +146,18 @@ public final class X3VerificationApp extends Application {
 
     private void runSingleConversion(Path input, StackPane root, Label status) {
         try {
-            Path wavOut = swapExtension(input, "wav");
-            convertX3a(input, wavOut);
+            String ext = extensionOf(input.getFileName().toString());
+            Path out;
+            if ("wav".equals(ext)) {
+                out = swapExtension(input, "x3a");
+                convertWav(input, out);
+            } else {
+                out = swapExtension(input, "wav");
+                convertX3a(input, out);
+            }
+            final Path finalOut = out;
             Platform.runLater(() -> {
-                status.setText("Wrote " + wavOut.getFileName());
+                status.setText("Wrote " + finalOut.getFileName());
                 root.setDisable(false);
             });
         } catch (Exception e) {
@@ -160,15 +169,15 @@ public final class X3VerificationApp extends Application {
         }
     }
 
-    /// Walks dropped folders for `.SUD` files off the FX thread (runs on a conversion
+    /// Walks dropped folders for supported files off the FX thread (runs on a conversion
     /// worker), then hands the resolved batch back to the FX thread to build the
     /// progress view and fan out per-file conversion tasks.
     private void startBatch(List<File> dropped, StackPane root, StackPane singleView, VBox batchView,
                             ListView<FileTask> fileList, ProgressBar progressBar, Label progressLabel,
                             Label status) {
-        List<Path> sudFiles;
+        List<Path> files;
         try {
-            sudFiles = collectSudFiles(dropped);
+            files = collectSupportedFiles(dropped);
         } catch (UncheckedIOException e) {
             Platform.runLater(() -> {
                 status.setText("Failed: " + e.getMessage());
@@ -176,16 +185,16 @@ public final class X3VerificationApp extends Application {
             });
             return;
         }
-        if (sudFiles.isEmpty()) {
+        if (files.isEmpty()) {
             Platform.runLater(() -> {
-                status.setText("No .SUD files found");
+                status.setText("No supported files found");
                 root.setDisable(false);
             });
             return;
         }
 
-        List<FileTask> tasks = new ArrayList<>(sudFiles.size());
-        for (Path path : sudFiles) {
+        List<FileTask> tasks = new ArrayList<>(files.size());
+        for (Path path : files) {
             tasks.add(new FileTask(path));
         }
         int total = tasks.size();
@@ -209,32 +218,32 @@ public final class X3VerificationApp extends Application {
         }
     }
 
-    /// Recursively collects every `.SUD` file among the dropped files/folders (case-insensitive
-    /// extension), ignoring any other file types mixed into the same drop.
-    private static List<Path> collectSudFiles(List<File> dropped) {
+    /// Recursively collects every supported file (.sud, .x3a, .wav) among the dropped files/folders
+    /// (case-insensitive extension), ignoring any other file types mixed into the same drop.
+    private static List<Path> collectSupportedFiles(List<File> dropped) {
         List<Path> result = new ArrayList<>();
         for (File file : dropped) {
             Path path = file.toPath();
             if (Files.isDirectory(path)) {
                 try (Stream<Path> walk = Files.walk(path)) {
                     walk.filter(Files::isRegularFile)
-                            .filter(p -> "sud".equals(extensionOf(p.getFileName().toString())))
+                            .filter(p -> isSupported(p.toFile()))
                             .sorted()
                             .forEach(result::add);
                 } catch (IOException e) {
                     throw new UncheckedIOException(e);
                 }
-            } else if ("sud".equals(extensionOf(file.getName()))) {
+            } else if (isSupported(file)) {
                 result.add(path);
             }
         }
         return result;
     }
 
-    /// Decodes one batch entry, held to at most [#MAX_PARALLEL_FILES] concurrent
+    /// Decodes or encodes one batch entry, held to at most [#MAX_PARALLEL_FILES] concurrent
     /// conversions via `limiter` — every task is submitted up front, but blocks here
     /// until a slot frees up, so a task only flips to RUNNING once it's actually
-    /// decoding. Updates its row and the overall progress bar/count as soon as it's
+    /// converting. Updates its row and the overall progress bar/count as soon as it's
     /// done, independent of how many other files are mid-conversion.
     private void runBatchConversion(FileTask task, AtomicInteger completed, AtomicInteger failed, int total,
                                     StackPane root, ListView<FileTask> fileList, ProgressBar progressBar,
@@ -244,7 +253,14 @@ public final class X3VerificationApp extends Application {
             try {
                 task.state = FileTask.State.RUNNING;
                 Platform.runLater(fileList::refresh);
-                convertSud(task.path, swapExtension(task.path, "wav"));
+                String ext = extensionOf(task.path.getFileName().toString());
+                if ("wav".equals(ext)) {
+                    convertWav(task.path, swapExtension(task.path, "x3a"));
+                } else if ("x3a".equals(ext)) {
+                    convertX3a(task.path, swapExtension(task.path, "wav"));
+                } else {
+                    convertSud(task.path, swapExtension(task.path, "wav"));
+                }
                 task.state = FileTask.State.DONE;
             } finally {
                 limiter.release();
@@ -306,6 +322,10 @@ public final class X3VerificationApp extends Application {
         try (StreamingWavWriter writer = new StreamingWavWriter(wavOut, decoded.sampleRate, decoded.channels)) {
             writer.writeFrames(decoded.pcm, decoded.frames());
         }
+    }
+
+    private void convertWav(Path input, Path x3aOut) throws IOException {
+        X3Files.wavToX3a(input, x3aOut);
     }
 
     private static void writeXmlSidecar(Path wavOut, String xml) throws IOException {
