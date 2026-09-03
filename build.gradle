@@ -6,10 +6,18 @@ plugins {
 }
 
 group = 'com.github.bingo-tango'
-version = '0.0.1'
+version = '0.0.2'
 
 repositories {
     mavenCentral()
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java // This tells Gradle to publish the jar compiled by the java plugin
+        }
+    }
 }
 
 java {
