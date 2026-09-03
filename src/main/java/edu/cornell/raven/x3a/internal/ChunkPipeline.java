@@ -23,6 +23,11 @@ import java.util.concurrent.Semaphore;
 /// Frame_Timestamp]`. `File_Byte_Offset` points at the start of the container record;
 /// `payloadHeaderBytes` skips any fixed header before the X3 bitstream.
 ///
+/// A chunk that falls entirely inside the requested window decodes straight into the caller's
+/// `dest` at its final offset; only the partial chunks at a window's two ends need a scratch
+/// buffer and a copy. Every interior chunk of a multi-chunk window takes the direct path, so a
+/// whole-file read allocates and copies nothing beyond `dest` itself.
+///
 /// Active chunk work is bounded by a per-pipeline semaphore (`maxConcurrency`) and,
 /// when configured, the process-wide [DecodeScheduler#sharedLimiter()] — so many
 /// concurrent decoders in one process don't oversubscribe CPU. Fan-out uses a
@@ -54,7 +59,8 @@ public final class ChunkPipeline {
     private final int payloadHeaderBytes;
     private final boolean sudPayload;
 
-    /// Reusable sequential-path scratch (not used by parallel tasks).
+    /// Reusable sequential-path scratch for partially-covered chunks only (not used by parallel
+    /// tasks, nor by fully-covered chunks, which decode straight into the caller's buffer).
     private short[] seqScratch = new short[8192];
 
     /// Legacy constructor without payload framing options; assumes bare (non-SUD) payloads.
@@ -171,14 +177,20 @@ public final class ChunkPipeline {
         while (framesWritten < length && chunk < chunkCount) {
             long chunkStart = sampleOffset(chunk);
             int chunkSamples = chunkSampleCount(chunk);
-            decodeChunkIntoScratch(chunk, chunkSamples);
 
             long copyFrom = Math.max(startSample, chunkStart);
             long copyTo = Math.min(end, chunkStart + chunkSamples);
             int localFrom = (int) (copyFrom - chunkStart);
             int n = (int) (copyTo - copyFrom);
-            System.arraycopy(seqScratch, localFrom * channels,
-                    dest, framesWritten * channels, n * channels);
+            int destBase = framesWritten * channels;
+
+            if (localFrom == 0 && n == chunkSamples) {
+                decodeChunk(chunk, chunkSamples, dest, destBase);
+            } else {
+                ensureSeqScratch(chunkSamples * channels);
+                decodeChunk(chunk, chunkSamples, seqScratch, 0);
+                System.arraycopy(seqScratch, localFrom * channels, dest, destBase, n * channels);
+            }
 
             framesWritten += n;
             chunk++;
@@ -205,14 +217,18 @@ public final class ChunkPipeline {
             tasks.add(() -> {
                 acquirePermits();
                 try {
-                    // Task-local decoder + scratch: X3AudioDecoder keeps block scratch on the instance.
+                    // Task-local decoder: X3AudioDecoder keeps block scratch on the instance.
                     X3AudioDecoder local = audioDecoder.newInstance();
-                    short[] scratch = new short[chunkSamples * channels];
                     long fileOff = fileByteOffset(chunkIndex) + payloadHeaderBytes;
                     int payloadLen = (int) chunkLength(chunkIndex);
                     MemorySegment payload = mappedFile.asSlice(fileOff, payloadLen);
-                    local.decodeChunkInt(payload, chunkSamples, channels, scratch, 0, sudPayload);
-                    System.arraycopy(scratch, localFrom * channels, dest, destBase, n * channels);
+                    if (localFrom == 0 && n == chunkSamples) {
+                        local.decodeChunkInt(payload, chunkSamples, channels, dest, destBase, sudPayload);
+                    } else {
+                        short[] scratch = new short[chunkSamples * channels];
+                        local.decodeChunkInt(payload, chunkSamples, channels, scratch, 0, sudPayload);
+                        System.arraycopy(scratch, localFrom * channels, dest, destBase, n * channels);
+                    }
                     return null;
                 } finally {
                     releasePermits();
@@ -240,12 +256,13 @@ public final class ChunkPipeline {
         return length;
     }
 
-    private void decodeChunkIntoScratch(int chunk, int chunkSamples) {
-        ensureSeqScratch(chunkSamples * channels);
+    /// Decodes chunk `chunk` in full into `dest` at `destOffset`, using this pipeline's shared
+    /// decoder — sequential path only; parallel tasks use their own [X3AudioDecoder#newInstance].
+    private void decodeChunk(int chunk, int chunkSamples, short[] dest, int destOffset) {
         long fileOff = fileByteOffset(chunk) + payloadHeaderBytes;
         int payloadLen = (int) chunkLength(chunk);
         MemorySegment payload = mappedFile.asSlice(fileOff, payloadLen);
-        audioDecoder.decodeChunkInt(payload, chunkSamples, channels, seqScratch, 0, sudPayload);
+        audioDecoder.decodeChunkInt(payload, chunkSamples, channels, dest, destOffset, sudPayload);
     }
 
     private void acquirePermits() throws InterruptedException {
