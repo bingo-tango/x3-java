@@ -21,17 +21,20 @@ public final class DecodeOptions {
     private final Semaphore sharedLimiter;
     private final int payloadHeaderBytes;
     private final boolean sudPayload;
+    private final boolean verifyPayloadCrc;
 
     private DecodeOptions(int maxConcurrency,
                           boolean useSharedLimiter,
                           Semaphore sharedLimiter,
                           int payloadHeaderBytes,
-                          boolean sudPayload) {
+                          boolean sudPayload,
+                          boolean verifyPayloadCrc) {
         this.maxConcurrency = Math.max(1, maxConcurrency);
         this.useSharedLimiter = useSharedLimiter;
         this.sharedLimiter = sharedLimiter;
         this.payloadHeaderBytes = Math.max(0, payloadHeaderBytes);
         this.sudPayload = sudPayload;
+        this.verifyPayloadCrc = verifyPayloadCrc;
     }
 
     /// Library defaults: per-decoder `min(4, cores)`, shared limiter on with
@@ -42,7 +45,7 @@ public final class DecodeOptions {
             max = DecodeScheduler.defaultPerDecoderConcurrency();
         }
         boolean sharedOn = sharedLimiterPropertyDefaultTrue();
-        return new DecodeOptions(max, sharedOn, DecodeScheduler.sharedLimiter(), 0, false);
+        return new DecodeOptions(max, sharedOn, DecodeScheduler.sharedLimiter(), 0, false, false);
     }
 
     /// Defaults for SoundTrap `.SUD`: pair-swap payloads and skip the container's fixed
@@ -53,12 +56,14 @@ public final class DecodeOptions {
 
     /// Returns a copy with a different concurrency cap.
     public DecodeOptions withMaxConcurrency(int maxConcurrency) {
-        return new DecodeOptions(maxConcurrency, useSharedLimiter, sharedLimiter, payloadHeaderBytes, sudPayload);
+        return new DecodeOptions(maxConcurrency, useSharedLimiter, sharedLimiter, payloadHeaderBytes,
+                sudPayload, verifyPayloadCrc);
     }
 
     /// Returns a copy that does or doesn't also acquire the process-wide shared limiter.
     public DecodeOptions withSharedLimiter(boolean enabled) {
-        return new DecodeOptions(maxConcurrency, enabled, sharedLimiter, payloadHeaderBytes, sudPayload);
+        return new DecodeOptions(maxConcurrency, enabled, sharedLimiter, payloadHeaderBytes,
+                sudPayload, verifyPayloadCrc);
     }
 
     /// Returns a copy using a custom shared semaphore instead of [DecodeScheduler#sharedLimiter()]
@@ -67,18 +72,33 @@ public final class DecodeOptions {
         if (semaphore == null) {
             throw new IllegalArgumentException("sharedLimiter must not be null");
         }
-        return new DecodeOptions(maxConcurrency, true, semaphore, payloadHeaderBytes, sudPayload);
+        return new DecodeOptions(maxConcurrency, true, semaphore, payloadHeaderBytes,
+                sudPayload, verifyPayloadCrc);
     }
 
     /// Returns a copy that skips `payloadHeaderBytes` before each chunk's X3 bitstream —
     /// for container formats that prefix a fixed record header.
     public DecodeOptions withPayloadHeaderBytes(int payloadHeaderBytes) {
-        return new DecodeOptions(maxConcurrency, useSharedLimiter, sharedLimiter, payloadHeaderBytes, sudPayload);
+        return new DecodeOptions(maxConcurrency, useSharedLimiter, sharedLimiter, payloadHeaderBytes,
+                sudPayload, verifyPayloadCrc);
     }
 
     /// Returns a copy that does or doesn't apply SUD pair-wise byte swap while reading.
     public DecodeOptions withSudPayload(boolean sudPayload) {
-        return new DecodeOptions(maxConcurrency, useSharedLimiter, sharedLimiter, payloadHeaderBytes, sudPayload);
+        return new DecodeOptions(maxConcurrency, useSharedLimiter, sharedLimiter, payloadHeaderBytes,
+                sudPayload, verifyPayloadCrc);
+    }
+
+    /// Returns a copy that does or doesn't verify every frame's payload CRC before decoding.
+    ///
+    /// Off by default. Framing integrity (the frame key plus each frame *header*'s CRC) is
+    /// always checked while indexing, and a corrupt payload almost always surfaces anyway as a
+    /// bitstream underrun or an invalid Rice/BFP code. Enabling this adds a full pass over every
+    /// compressed byte, so it roughly doubles the read cost — worth it when you need to
+    /// distinguish "corrupt input" from "decoder bug", not for routine decoding.
+    public DecodeOptions withVerifyPayloadCrc(boolean verifyPayloadCrc) {
+        return new DecodeOptions(maxConcurrency, useSharedLimiter, sharedLimiter, payloadHeaderBytes,
+                sudPayload, verifyPayloadCrc);
     }
 
     /// Configured concurrency cap.
@@ -104,6 +124,11 @@ public final class DecodeOptions {
     /// Whether SUD pair-wise byte swap is applied while reading.
     public boolean sudPayload() {
         return sudPayload;
+    }
+
+    /// Whether every frame's payload CRC is verified before decoding.
+    public boolean verifyPayloadCrc() {
+        return verifyPayloadCrc;
     }
 
     private static boolean sharedLimiterPropertyDefaultTrue() {

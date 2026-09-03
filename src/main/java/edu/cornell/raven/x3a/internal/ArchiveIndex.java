@@ -17,9 +17,10 @@ import java.util.regex.Pattern;
 /// payload (past its header), so pipelines index archives with `payloadHeaderBytes = 0`.
 ///
 /// Header CRCs are verified for every frame during the walk, which catches truncation and
-/// framing corruption for the cost of 20 bytes per frame. Payload CRCs are *not* checked
-/// here — that would mean touching every compressed byte at open time; callers that decode
-/// the whole archive anyway (see `X3Files.decodeArchive`) validate payloads as they go.
+/// framing corruption for the cost of 20 bytes per frame. Payload CRCs are checked only when
+/// the caller asks (`verifyPayloadCrc`), since that means touching every compressed byte at
+/// open time; a corrupt payload otherwise surfaces during decode as a bitstream underrun or an
+/// invalid Rice/BFP code.
 public final class ArchiveIndex {
 
     private static final Pattern FS = Pattern.compile("<FS[^>]*>(\\d+)</FS>", Pattern.CASE_INSENSITIVE);
@@ -53,13 +54,27 @@ public final class ArchiveIndex {
         this.xml = xml;
     }
 
-    /// Indexes a mapped archive image.
+    /// Indexes a mapped archive image, verifying frame headers but not payloads.
     ///
     /// @param defaultBlockLen block length to assume when the config frame omits `<BLKLEN>`
     /// @param defaultRiceOrders rice orders to assume when the config frame omits `<CODES>`
     /// @throws IllegalArgumentException if the archive magic, config frame, or any frame
     ///                                  header is malformed
     public static ArchiveIndex build(MemorySegment archive, int defaultBlockLen, int[] defaultRiceOrders) {
+        return build(archive, defaultBlockLen, defaultRiceOrders, false);
+    }
+
+    /// Indexes a mapped archive image.
+    ///
+    /// @param defaultBlockLen block length to assume when the config frame omits `<BLKLEN>`
+    /// @param defaultRiceOrders rice orders to assume when the config frame omits `<CODES>`
+    /// @param verifyPayloadCrc also CRC every data frame's payload, touching every compressed
+    ///                         byte — see [edu.cornell.raven.x3a.DecodeOptions#verifyPayloadCrc()]
+    /// @throws IllegalArgumentException if the archive magic, config frame, or any frame
+    ///                                  header is malformed, or — when `verifyPayloadCrc` is
+    ///                                  set — if any payload CRC mismatches
+    public static ArchiveIndex build(MemorySegment archive, int defaultBlockLen, int[] defaultRiceOrders,
+                                     boolean verifyPayloadCrc) {
         long size = archive.byteSize();
         if (size < X3FrameHeader.ARCHIVE_ID.length + X3FrameHeader.LENGTH) {
             throw new IllegalArgumentException("archive too small: " + size + " bytes");
@@ -98,6 +113,9 @@ public final class ArchiveIndex {
             long payloadStart = pos + X3FrameHeader.LENGTH;
             if (fh.payloadLen <= 0 || payloadStart + fh.payloadLen > size) {
                 break;
+            }
+            if (verifyPayloadCrc && Crc16.crc(archive, payloadStart, fh.payloadLen) != fh.payloadCrc) {
+                throw new IllegalArgumentException("frame payload CRC mismatch at " + pos);
             }
             if (fh.samples > 0) {
                 channels = Math.max(1, fh.channels);

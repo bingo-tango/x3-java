@@ -114,6 +114,36 @@ Construct `sud.SudStreamingDecoder` or `X3ArchiveStreamingDecoder` directly when
 the container and want its type-specific extras — `SudStreamingDecoder.metadata()`
 (device tags, `xmlConfig()`) or `X3ArchiveStreamingDecoder.xmlConfig()`.
 
+### Bulk (whole-file) decode and encode
+
+`X3BulkDecoder` / `X3BulkEncoder` are the bulk half of the API: one file in, one
+buffer out. They share the streaming decoders' framing and parallel decode
+engine, so output is identical — only the access pattern differs. For archives
+too large to hold decoded, use `X3Streams.open` and read bounded windows instead.
+
+```java
+import edu.cornell.raven.x3a.X3BulkDecoder;
+import edu.cornell.raven.x3a.X3BulkEncoder;
+
+X3BulkDecoder.DecodedArchive dec = X3BulkDecoder.decode(Path.of("out.x3a"));
+// dec.sampleRate(), dec.channels(), dec.pcm() (interleaved short[]), dec.xml() (embedded config)
+
+// An archive already in memory is wrapped, not copied:
+X3BulkDecoder.DecodedArchive fromBytes = X3BulkDecoder.decode(archiveBytes);
+
+byte[] archive = X3BulkEncoder.encode(pcm, frames, channels, sampleRate);
+```
+
+Frame headers and their CRCs are always verified. Payload CRCs are *not*, by
+default — that means a full extra pass over every compressed byte, and corrupt
+payloads almost always surface anyway as a bitstream underrun or an invalid
+Rice/BFP code. Ask for the strict check when you need to tell "corrupt input"
+from "decoder bug":
+
+```java
+X3BulkDecoder.decode(path, DecodeOptions.defaults().withVerifyPayloadCrc(true));
+```
+
 ### Converting `.wav` ↔ `.x3a`
 
 ```java
@@ -121,20 +151,21 @@ import edu.cornell.raven.x3a.X3Files;
 
 X3Files.wavToX3a(Path.of("in.wav"), Path.of("out.x3a"));
 X3Files.x3aToWav(Path.of("out.x3a"), Path.of("roundtrip.wav"));
+```
 
-// Or decode an archive already in memory (whole file into one buffer — for large
-// archives prefer X3ArchiveStreamingDecoder and read bounded windows instead):
-X3Files.DecodedArchive dec = X3Files.decodeArchive(archiveBytes);
-// dec.sampleRate(), dec.channels(), dec.pcm() (interleaved short[]), dec.xml() (embedded config)
+### Reading metadata only
 
-// Metadata only, no PCM decode — works on both .x3a and .SUD:
-X3Files.X3Header header = X3Files.readHeader(Path.of("recording.sud"));
+No PCM decode; works on both `.x3a` and `.SUD`:
+
+```java
+X3Streams.X3Header header = X3Streams.readHeader(Path.of("recording.sud"));
+// header.sampleRate(), header.channels(), header.bitDepth(), header.frames(), header.deviceId()
 ```
 
 ### Tuning decode concurrency
 
 `X3ArchiveStreamingDecoder`, `sud.SudStreamingDecoder`, `X3Streams.open`, and
-`X3Files.decodeArchive` all accept a `DecodeOptions`:
+`X3BulkDecoder.decode` all accept a `DecodeOptions`:
 
 ```java
 DecodeOptions opts = DecodeOptions.defaults().withMaxConcurrency(2);
@@ -157,7 +188,7 @@ Hard performance rules for anyone touching decode/parse/math paths are in
 
 | Package | Role |
 | --- | --- |
-| `edu.cornell.raven.x3a` | Public API: `X3StreamingDecoder`, `X3Streams`, `X3ArchiveStreamingDecoder`, `X3Files`, `X3FrameDecoder`/`Encoder`, `DecodeOptions`, `X3FormatException` |
+| `edu.cornell.raven.x3a` | Public API: `X3StreamingDecoder`, `X3Streams`, `X3ArchiveStreamingDecoder`, `X3BulkDecoder`/`Encoder`, `X3Files`, `X3FrameDecoder`/`Encoder`, `DecodeOptions`, `X3FormatException` |
 | `edu.cornell.raven.x3a.sud` | `.SUD` container: `SudFileMapper`, `FileMetadata`, `TelemetryCallback`, facade `SudStreamingDecoder` |
 | `edu.cornell.raven.x3a.internal` | Not exported: `BitstreamReader`/`Writer`, `ChunkPipeline`, `ChunkIndex`, `ArchiveIndex`, framing/CRC helpers |
 
@@ -181,9 +212,12 @@ used standalone on bare `.x3a` archives without any SUD-container concept.
 - **Virtual-thread parallel decode** — independent chunks/frames (each holds
   its own filter state) decode concurrently via
   `Executors.newVirtualThreadPerTaskExecutor()`, gated by local + optional
-  process-wide `Semaphore` limits (`ChunkPipeline` for windowed reads of either
-  container, the parallel path in `X3Files.decodeArchive` for whole-file
-  archive decode).
+  process-wide `Semaphore` limits. One engine, `ChunkPipeline`, serves both
+  containers and both access modes: streaming windows and whole-file bulk decode
+  differ only in the window they ask for. A frame lying entirely inside the
+  requested window decodes straight into the caller's buffer, so bulk decode
+  — where every frame does — allocates and copies nothing beyond the output
+  array itself.
 
 
 ## Project layout

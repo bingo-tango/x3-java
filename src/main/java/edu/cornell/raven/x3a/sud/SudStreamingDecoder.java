@@ -24,7 +24,6 @@ import java.util.regex.Pattern;
 /// / [#decodeSamplesFloat] can seek and decode without further I/O setup cost.
 public class SudStreamingDecoder implements X3StreamingDecoder {
 
-    private static final float SCALE_TO_UNIT = 1.0f / 32768.0f;
     private static final Pattern BLKLEN = Pattern.compile("<BLKLEN>\\s*(\\d+)\\s*</BLKLEN>");
 
     private final SudFileMapper mapper;
@@ -38,9 +37,6 @@ public class SudStreamingDecoder implements X3StreamingDecoder {
     private final ChunkPipeline pipeline;
     private final DecodeOptions options;
     private final int channels;
-
-    /// Reusable int→float scratch for [#decodeSamplesFloat]; grows once, then stays sized.
-    private short[] floatScratch = new short[0];
 
     private boolean closed;
 
@@ -110,6 +106,11 @@ public class SudStreamingDecoder implements X3StreamingDecoder {
         return chunkIndex.totalSamples();
     }
 
+    @Override
+    public String deviceId() {
+        return metadata.deviceId();
+    }
+
     /// In-memory chunk index, allowing random seeking by sample without `.sudx`
     /// sidecar files. Package-scoped: [ChunkIndex] is an internal type, and
     /// [#totalSamples()] covers what callers outside the library need from it.
@@ -142,25 +143,17 @@ public class SudStreamingDecoder implements X3StreamingDecoder {
         }
     }
 
-    /// Same as [#decodeSamplesInt] but normalizes into `[-1, 1)` floats. Internal
+    /// Same as [#decodeSamplesInt] but normalizes into `[-1, 1)` floats. The pipeline's
     /// int scratch grows once to the largest requested window, then stays allocation-free.
     ///
     /// @return number of frames written
     @Override
     public int decodeSamplesFloat(long startSample, int length, float[] destFloatBuffer) throws IOException {
-        if (length <= 0) {
-            return 0;
+        try {
+            return pipeline.decodeWindowFloat(startSample, length, destFloatBuffer);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            throw new X3FormatException("corrupt SUD chunk data at sample " + startSample, e);
         }
-        int need = length * channels;
-        if (floatScratch.length < need) {
-            floatScratch = new short[need];
-        }
-        int readFrames = decodeSamplesInt(startSample, length, floatScratch);
-        int samples = readFrames * channels;
-        for (int i = 0; i < samples; i++) {
-            destFloatBuffer[i] = floatScratch[i] * SCALE_TO_UNIT;
-        }
-        return readFrames;
     }
 
     static int parseBlockLen(String xml, int defaultLen) {

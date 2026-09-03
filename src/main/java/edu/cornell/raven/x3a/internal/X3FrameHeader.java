@@ -4,8 +4,8 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
 /// 20-byte big-endian frame header prefixing every frame in an X3 archive (`.x3a`) —
-/// the "x3" key plus header/payload CRCs let [X3Files#decodeArchive(byte[])] detect a
-/// truncated or corrupted archive before touching frame payload bytes.
+/// the "x3" key plus header/payload CRCs let [ArchiveIndex] detect a truncated or corrupted
+/// archive before touching frame payload bytes.
 public final class X3FrameHeader {
 
     /// Encoded header size in bytes.

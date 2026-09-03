@@ -34,6 +34,9 @@ import java.util.concurrent.Semaphore;
 /// virtual-thread-per-task executor (the stable API, avoiding preview `StructuredTaskScope`).
 public final class ChunkPipeline {
 
+    /// 16-bit PCM full scale, for normalizing into `[-1, 1)` floats.
+    private static final float SCALE_TO_UNIT = 1.0f / 32768.0f;
+
     /// Longs per chunk index entry.
     public static final int INDEX_STRIDE = 4;
     /// Index-entry offset of a chunk's starting sample.
@@ -62,6 +65,10 @@ public final class ChunkPipeline {
     /// Reusable sequential-path scratch for partially-covered chunks only (not used by parallel
     /// tasks, nor by fully-covered chunks, which decode straight into the caller's buffer).
     private short[] seqScratch = new short[8192];
+
+    /// Reusable int staging buffer for [#decodeWindowFloat(long,int,float[])]; grows to the
+    /// largest window asked for, then stays sized so a steady-state read loop allocates nothing.
+    private short[] floatScratch = new short[0];
 
     /// Legacy constructor without payload framing options; assumes bare (non-SUD) payloads.
     public ChunkPipeline(MemorySegment mappedFile,
@@ -144,11 +151,27 @@ public final class ChunkPipeline {
         }
         int frames = decodeWindowInt(startSample, length, scratch);
         int samples = frames * channels;
-        final float scale = 1.0f / 32768.0f;
         for (int i = 0; i < samples; i++) {
-            dest[i] = scratch[i] * scale;
+            dest[i] = scratch[i] * SCALE_TO_UNIT;
         }
         return frames;
+    }
+
+    /// Same as [#decodeWindowFloat(long,int,float[],short[])] but staging through this
+    /// pipeline's own [#floatScratch], so callers that always want floats don't each keep an
+    /// int buffer of their own. Not safe for concurrent use — one pipeline per reader thread,
+    /// which is already the contract for the streaming decoders built on it.
+    ///
+    /// @return number of PCM frames written
+    public int decodeWindowFloat(long startSample, int length, float[] dest) {
+        if (length <= 0) {
+            return 0;
+        }
+        int need = length * channels;
+        if (floatScratch.length < need) {
+            floatScratch = new short[need];
+        }
+        return decodeWindowFloat(startSample, length, dest, floatScratch);
     }
 
     /// Configured cap on concurrently in-flight chunk decode tasks for this pipeline.

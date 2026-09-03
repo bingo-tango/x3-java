@@ -54,12 +54,12 @@ public class X3FrameDecoderBenchmark {
     /// Int chunk decode path.
     @Benchmark
     public void decodeChunkInt(Blackhole blackhole) {
-        blackhole.consume(decoder.decodeChunkInt(payload, 1, 1, intDest, 0));
+        blackhole.consume(decoder.decodeChunkInt(payload, 1, 1, intDest, 0, true));
     }
 
     /// Float chunk decode path, including normalization.
     @Benchmark
     public void decodeChunkFloat(Blackhole blackhole) {
-        blackhole.consume(decoder.decodeChunkFloat(payload, 1, 1, floatDest, 0, scratch));
+        blackhole.consume(decoder.decodeChunkFloat(payload, 1, 1, floatDest, 0, scratch, true));
     }
 }

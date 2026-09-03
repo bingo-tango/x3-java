@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/// Verifies windowed random-access archive decode against [X3Files#decodeArchive(byte[])],
+/// Verifies windowed random-access archive decode against [X3BulkDecoder#decode(Path)],
 /// which is already cross-validated bit-for-bit against the reference implementations.
 class X3ArchiveStreamingDecoderTest {
 
@@ -54,7 +54,7 @@ class X3ArchiveStreamingDecoderTest {
     @Test
     void windowedDecodeMatchesWholeArchiveDecode() throws Exception {
         Path x3a = writeArchive(1);
-        X3Files.DecodedArchive expected = X3Files.decodeArchive(Files.readAllBytes(x3a));
+        X3BulkDecoder.DecodedArchive expected = X3BulkDecoder.decode(x3a);
 
         // Window sizes deliberately unaligned to the encoder's frame length, so reads start and
         // end mid-frame; offsets cover the first frame, an interior seek, and the tail.
@@ -81,7 +81,7 @@ class X3ArchiveStreamingDecoderTest {
     @Test
     void windowedDecodeMatchesWholeArchiveDecodeStereo() throws Exception {
         Path x3a = writeArchive(2);
-        X3Files.DecodedArchive expected = X3Files.decodeArchive(Files.readAllBytes(x3a));
+        X3BulkDecoder.DecodedArchive expected = X3BulkDecoder.decode(x3a);
 
         try (X3ArchiveStreamingDecoder decoder = new X3ArchiveStreamingDecoder(x3a)) {
             assertEquals(2, decoder.channels());
@@ -169,7 +169,7 @@ class X3ArchiveStreamingDecoderTest {
     @Test
     void readHeaderAgreesWithArchiveDecoder() throws Exception {
         Path x3a = writeArchive(2);
-        X3Files.X3Header header = X3Files.readHeader(x3a);
+        X3Streams.X3Header header = X3Streams.readHeader(x3a);
         try (X3ArchiveStreamingDecoder decoder = new X3ArchiveStreamingDecoder(x3a)) {
             assertEquals(decoder.sampleRate(), header.sampleRate());
             assertEquals(decoder.channels(), header.channels());

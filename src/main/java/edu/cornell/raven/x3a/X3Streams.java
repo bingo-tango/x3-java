@@ -18,6 +18,8 @@ import java.nio.ByteBuffer;
 /// [X3ArchiveStreamingDecoder] or [edu.cornell.raven.x3a.sud.SudStreamingDecoder] directly
 /// only when the container is already known.
 ///
+/// Also the home of [#readHeader(Path)], for hosts that want format metadata and no samples.
+///
 /// For a whole-file decode into one buffer, use [X3BulkDecoder] instead.
 public final class X3Streams {
 
@@ -44,6 +46,21 @@ public final class X3Streams {
                 : new edu.cornell.raven.x3a.sud.SudStreamingDecoder(path, options);
     }
 
+    /// Reads format metadata without decoding any PCM.
+    ///
+    /// Opens `path` with [#open(Path)] — so the same magic sniffing applies — and reports what
+    /// the resulting decoder knows about the stream, then closes it. Only frame headers are
+    /// walked, so cost scales with frame count rather than file size.
+    ///
+    /// @throws X3FormatException if the file is neither a readable archive nor a `.SUD` container
+    /// @throws IOException if the file cannot be read
+    public static X3Header readHeader(Path path) throws IOException {
+        try (X3StreamingDecoder decoder = open(path)) {
+            return new X3Header(decoder.sampleRate(), decoder.channels(), decoder.bitDepth(),
+                    decoder.totalSamples(), decoder.deviceId());
+        }
+    }
+
     /// Whether `path` opens with the `X3ARCHIV` magic of a bare X3 archive. A file too short to
     /// hold the magic reads as "not an archive", leaving the container reader to report why.
     ///
@@ -68,5 +85,21 @@ public final class X3Streams {
             }
         }
         return true;
+    }
+
+    /// Format metadata for one X3 file, as reported by [#readHeader(Path)] — everything a host
+    /// needs to build an output header, with no PCM decoded.
+    public record X3Header(
+            /// Sample rate in Hz
+            int sampleRate,
+            /// Channel count
+            int channels,
+            /// Bits per sample
+            int bitDepth,
+            /// Total audio frames
+            long frames,
+            /// Device identifier from metadata, or [X3StreamingDecoder#UNKNOWN_DEVICE_ID]
+            String deviceId
+    ) {
     }
 }

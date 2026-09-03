@@ -26,8 +26,6 @@ import java.nio.file.StandardOpenOption;
 /// scratch, so concurrent readers need one decoder each.
 public final class X3ArchiveStreamingDecoder implements X3StreamingDecoder {
 
-    private static final float SCALE_TO_UNIT = 1.0f / 32768.0f;
-
     /// X3 codes 16-bit PCM; the archive format carries no other depth.
     private static final int BIT_DEPTH = 16;
 
@@ -36,9 +34,6 @@ public final class X3ArchiveStreamingDecoder implements X3StreamingDecoder {
     private final ArchiveIndex index;
     private final ChunkPipeline pipeline;
     private final int channels;
-
-    /// Reusable short→float staging buffer for [#decodeSamplesFloat]; grows once, then stays sized.
-    private short[] floatScratch = new short[0];
 
     private boolean closed;
 
@@ -127,19 +122,11 @@ public final class X3ArchiveStreamingDecoder implements X3StreamingDecoder {
 
     @Override
     public int decodeSamplesFloat(long startSample, int length, float[] dest) throws IOException {
-        if (length <= 0) {
-            return 0;
+        try {
+            return pipeline.decodeWindowFloat(startSample, length, dest);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            throw new X3FormatException("corrupt X3 archive data at sample " + startSample, e);
         }
-        int need = length * channels;
-        if (floatScratch.length < need) {
-            floatScratch = new short[need];
-        }
-        int frames = decodeSamplesInt(startSample, length, floatScratch);
-        int samples = frames * channels;
-        for (int i = 0; i < samples; i++) {
-            dest[i] = floatScratch[i] * SCALE_TO_UNIT;
-        }
-        return frames;
     }
 
     /// Unmaps the archive. Idempotent; decoding after this throws [IllegalStateException] from

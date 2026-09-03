@@ -10,6 +10,8 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+/// Covers the `.wav` ↔ `.x3a` file conversions; the bulk codec underneath them has its own
+/// tests in [X3BulkCodecTest].
 class X3FilesTest {
 
     @TempDir
@@ -54,68 +56,5 @@ class X3FilesTest {
         assertEquals(orig.sampleRate, back.sampleRate);
         assertEquals(orig.channels, back.channels);
         assertArrayEquals(orig.samples, back.samples);
-    }
-
-    @Test
-    void encodeArchive_headerHasX3ArchivAndXml() {
-        short[] pcm = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20};
-        byte[] arch = X3Files.encodeArchive(pcm, pcm.length, 1, 16000, new X3FrameEncoder());
-        assertEquals('X', (char) arch[0]);
-        assertEquals('3', (char) arch[1]);
-        String asText = new String(arch, 0, Math.min(arch.length, 400));
-        assertTrue(asText.contains("X3ARCHIV") || arch[0] == 'X');
-        assertTrue(asText.contains("BLKLEN") || new String(arch).contains("BLKLEN"));
-    }
-
-    @Test
-    void readHeader_extractsMetadataFromX3Archive() throws Exception {
-        short[] pcm = new short[48000];
-        for (int i = 0; i < pcm.length; i++) {
-            pcm[i] = (short) (Math.sin(i * 0.01) * 12000);
-        }
-        Path wav = tmp.resolve("test.wav");
-        Path x3a = tmp.resolve("test.x3a");
-        WavPcm.write(wav, 48000, 2, pcm);
-        X3Files.wavToX3a(wav, x3a);
-
-        X3Files.X3Header header = X3Files.readHeader(x3a);
-
-        // X3 archives created from WAV preserve actual metadata in XML config
-        assertEquals(48000, header.sampleRate());
-        assertEquals(2, header.channels());
-        assertEquals(16, header.bitDepth());
-        assertEquals(24000, header.frames());
-    }
-
-    @Test
-    void getFrameCount_returnsFrameCountWithoutDecodingPcm() throws Exception {
-        short[] pcm = new short[16000];
-        Path wav = tmp.resolve("test.wav");
-        Path x3a = tmp.resolve("test.x3a");
-        WavPcm.write(wav, 16000, 1, pcm);
-        X3Files.wavToX3a(wav, x3a);
-
-        long frameCount = X3Files.getFrameCount(x3a);
-
-        assertEquals(16000, frameCount);
-    }
-
-    @Test
-    void readHeader_andDecodeArchive_consistentFrameCount() throws Exception {
-        short[] pcm = new short[32000];
-        for (int i = 0; i < pcm.length; i++) {
-            pcm[i] = (short) i;
-        }
-        Path wav = tmp.resolve("test.wav");
-        Path x3a = tmp.resolve("test.x3a");
-        WavPcm.write(wav, 16000, 1, pcm);
-        X3Files.wavToX3a(wav, x3a);
-
-        X3Files.X3Header header = X3Files.readHeader(x3a);
-        X3Files.DecodedArchive archive = X3Files.decodeArchive(Files.readAllBytes(x3a));
-
-        assertEquals(header.frames(), archive.frames());
-        assertEquals(header.sampleRate(), archive.sampleRate());
-        assertEquals(header.channels(), archive.channels());
     }
 }

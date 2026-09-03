@@ -41,9 +41,9 @@ public final class X3FrameDecoder {
 
     /// SoundTrap/SUD defaults (16-sample blocks, rice orders `{0, 1, 3}`) — the fallback
     /// [ChunkPipeline] constructs when no decoder is supplied. Plain `.x3a` archives use
-    /// [X3FrameEncoder#DEFAULT_BLOCK_LEN] (20) instead; [X3Files] always parses the
-    /// archive's own `<BLKLEN>` and constructs a decoder with the matching value, so this
-    /// default is never used for archive decode.
+    /// [X3FrameEncoder#DEFAULT_BLOCK_LEN] (20) instead; both [X3BulkDecoder] and
+    /// [X3ArchiveStreamingDecoder] parse the archive's own `<BLKLEN>` and construct a decoder
+    /// with the matching value, so this default is never used for archive decode.
     public X3FrameDecoder() {
         this(16, new int[] {0, 1, 3});
     }
@@ -136,12 +136,6 @@ public final class X3FrameDecoder {
         return sampleCount;
     }
 
-    /// Convenience: SUD payload (pair-swap on).
-    public int decodeChunkInt(MemorySegment payload, int sampleCount, int channels,
-                              short[] dest, int destOffset) {
-        return decodeChunkInt(payload, sampleCount, channels, dest, destOffset, true);
-    }
-
     /// Decodes and normalizes into a caller-owned `float[]` in `[-1, 1]`, via `scratch` as
     /// an intermediate — a pure countable multiply loop HotSpot can auto-vectorize.
     public int decodeChunkFloat(MemorySegment payload, int sampleCount, int channels,
@@ -152,12 +146,6 @@ public final class X3FrameDecoder {
             dest[destOffset + i] = scratch[i] * SCALE_TO_UNIT;
         }
         return frames;
-    }
-
-    /// Convenience: SUD payload (pair-swap on); see [#decodeChunkFloat(MemorySegment,int,int,float[],int,short[],boolean)].
-    public int decodeChunkFloat(MemorySegment payload, int sampleCount, int channels,
-                                float[] dest, int destOffset, short[] scratch) {
-        return decodeChunkFloat(payload, sampleCount, channels, dest, destOffset, scratch, true);
     }
 
     /// Decodes one coded block into `out[0..n)`, returning the actual sample count written
@@ -300,22 +288,6 @@ public final class X3FrameDecoder {
             int d = raw >= half ? raw - offs : raw;
             acc += d;
             out[i] = (short) acc;
-        }
-    }
-
-    /// Two's-complement adjust for an `nbits`-wide unsigned field.
-    static short fixSign(int d, int nbits) {
-        int half = 1 << (nbits - 1);
-        int offs = half << 1;
-        return (short) (d >= half ? d - offs : d);
-    }
-
-    /// Diff-filter inverse: running sum starting from `last`.
-    static void integrate(short[] op, int count, short last) {
-        int acc = last;
-        for (int k = 0; k < count; k++) {
-            acc += op[k];
-            op[k] = (short) acc;
         }
     }
 

@@ -1,5 +1,6 @@
 package edu.cornell.raven.x3a.tools;
 
+import edu.cornell.raven.x3a.X3BulkDecoder;
 import edu.cornell.raven.x3a.X3Files;
 import edu.cornell.raven.x3a.DecodeOptions;
 import edu.cornell.raven.x3a.sud.FileMetadata;
@@ -314,8 +315,7 @@ public final class X3VerificationApp extends Application {
     }
 
     private void convertX3a(Path input, Path wavOut) throws IOException {
-        byte[] archive = Files.readAllBytes(input);
-        X3Files.DecodedArchive decoded = X3Files.decodeArchive(archive);
+        X3BulkDecoder.DecodedArchive decoded = X3BulkDecoder.decode(input);
 
         writeXmlSidecar(wavOut, decoded.xml());
 

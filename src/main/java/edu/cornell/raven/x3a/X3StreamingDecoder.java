@@ -17,6 +17,9 @@ import java.io.IOException;
 /// file is clamped rather than failing, and returns fewer frames than asked for.
 public interface X3StreamingDecoder extends AutoCloseable {
 
+    /// [#deviceId()] for containers that don't identify their recorder.
+    String UNKNOWN_DEVICE_ID = "UNKNOWN";
+
     /// Sample rate in Hz.
     int sampleRate();
 
@@ -28,6 +31,12 @@ public interface X3StreamingDecoder extends AutoCloseable {
 
     /// Total frames (samples per channel) available to [#decodeSamplesInt].
     long totalSamples();
+
+    /// Recording device identifier, or [#UNKNOWN_DEVICE_ID] when the container carries no
+    /// device tag — bare `.x3a` archives don't, `.SUD` metadata records do.
+    default String deviceId() {
+        return UNKNOWN_DEVICE_ID;
+    }
 
     /// Decodes `length` frames starting at `startSample` into `dest` as interleaved 16-bit
     /// PCM, requiring `length * channels()` capacity from index 0.
