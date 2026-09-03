@@ -1,11 +1,12 @@
 plugins {
     id 'java'
+    id 'maven-publish'
     id 'me.champeau.jmh' version '0.7.3'
     id 'org.openjfx.javafxplugin' version '0.1.0'
 }
 
-group = 'edu.cornell.raven.x3a'
-version = '1.0-SNAPSHOT'
+group = 'com.github.bingo-tango.x3a'
+version = '0.0.1'
 
 repositories {
     mavenCentral()
