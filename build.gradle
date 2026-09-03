@@ -5,7 +5,7 @@ plugins {
     id 'org.openjfx.javafxplugin' version '0.1.0'
 }
 
-group = 'com.github.bingo-tango.x3a'
+group = 'com.github.bingo-tango'
 version = '0.0.1'
 
 repositories {
