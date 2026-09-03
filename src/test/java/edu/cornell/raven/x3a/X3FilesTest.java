@@ -26,11 +26,11 @@ class X3FilesTest {
         Path wavOut = tmp.resolve("out.wav");
         WavPcm.write(wavIn, 48000, 1, pcm);
 
-        X3Files.wav_to_x3a(wavIn, x3a);
+        X3Files.wavToX3a(wavIn, x3a);
         assertTrue(Files.size(x3a) > 32);
         assertEquals('X', (char) Files.readAllBytes(x3a)[0]);
 
-        X3Files.x3a_to_wav(x3a, wavOut);
+        X3Files.x3aToWav(x3a, wavOut);
         WavPcm.WavData round = WavPcm.read(wavOut);
         assertEquals(48000, round.sampleRate);
         assertEquals(1, round.channels);
@@ -76,7 +76,7 @@ class X3FilesTest {
         Path wav = tmp.resolve("test.wav");
         Path x3a = tmp.resolve("test.x3a");
         WavPcm.write(wav, 48000, 2, pcm);
-        X3Files.wav_to_x3a(wav, x3a);
+        X3Files.wavToX3a(wav, x3a);
 
         X3Files.X3Header header = X3Files.readHeader(x3a);
 
@@ -93,7 +93,7 @@ class X3FilesTest {
         Path wav = tmp.resolve("test.wav");
         Path x3a = tmp.resolve("test.x3a");
         WavPcm.write(wav, 16000, 1, pcm);
-        X3Files.wav_to_x3a(wav, x3a);
+        X3Files.wavToX3a(wav, x3a);
 
         long frameCount = X3Files.getFrameCount(x3a);
 
@@ -109,13 +109,13 @@ class X3FilesTest {
         Path wav = tmp.resolve("test.wav");
         Path x3a = tmp.resolve("test.x3a");
         WavPcm.write(wav, 16000, 1, pcm);
-        X3Files.wav_to_x3a(wav, x3a);
+        X3Files.wavToX3a(wav, x3a);
 
         X3Files.X3Header header = X3Files.readHeader(x3a);
         X3Files.DecodedArchive archive = X3Files.decodeArchive(Files.readAllBytes(x3a));
 
         assertEquals(header.frames(), archive.frames());
-        assertEquals(header.sampleRate(), archive.sampleRate);
-        assertEquals(header.channels(), archive.channels);
+        assertEquals(header.sampleRate(), archive.sampleRate());
+        assertEquals(header.channels(), archive.channels());
     }
 }

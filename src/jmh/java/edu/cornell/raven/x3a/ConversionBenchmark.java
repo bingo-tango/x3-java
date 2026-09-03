@@ -114,7 +114,7 @@ public class ConversionBenchmark {
             x3a = TEST_DIR.resolve(file + ".jmh_pre.x3a");
             wavOut = TEST_DIR.resolve(file + ".jmh_from_x3a.wav");
             // Untimed prepare so the benchmark measures x3a_to_wav only.
-            X3Files.wav_to_x3a(wav, x3a);
+            X3Files.wavToX3a(wav, x3a);
             x3aBytes = Files.size(x3a);
             X3A_BYTES.put(file, x3aBytes);
         }
@@ -176,7 +176,7 @@ public class ConversionBenchmark {
     /// Encode side of the round trip (WAV -> X3A).
     @Benchmark
     public void wav_to_x3a(EncodeInput in) throws Exception {
-        X3Files.wav_to_x3a(in.wav, in.x3a);
+        X3Files.wavToX3a(in.wav, in.x3a);
     }
 
     /// Encode side of the round trip (WAV -> FLAC). Requires `flac` CLI on PATH.
@@ -193,7 +193,7 @@ public class ConversionBenchmark {
 /// Decode side of the round trip (X3A -> WAV).
     @Benchmark
     public void x3a_to_wav(DecodeInput in) throws Exception {
-        X3Files.x3a_to_wav(in.x3a, in.wavOut);
+        X3Files.x3aToWav(in.x3a, in.wavOut);
     }
 
     /// Decode side of the round trip (FLAC -> WAV). Requires `flac` CLI on PATH.

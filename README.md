@@ -69,25 +69,31 @@ encode/decode MB/s and compression ratio.
 
 ## Usage
 
-The public API lives in two packages: `edu.cornell.raven.x3a`
-(codec/pipeline) and `edu.cornell.raven.x3a.sud` (the `.SUD`
-container + facade) — the only two packages exported by the JPMS module
-(`src/main/java/module-info.java`).
+The public API lives in two packages: `edu.cornell.raven.x3a` (codec, readers,
+file conversion) and `edu.cornell.raven.x3a.sud` (the `.SUD` container +
+facade) — the only two packages exported by the JPMS module
+(`src/main/java/module-info.java`). Everything in
+`edu.cornell.raven.x3a.internal` is implementation detail and unreachable from
+other modules.
 
-### Decoding a `.SUD` file
+### Decoding, container-agnostic
+
+`X3Readers.open` sniffs the file's magic bytes and returns an `X3SampleReader`
+— `X3ArchiveDecoder` for a bare `.x3a` archive, `sud.X3Decoder` for a `.SUD`
+container. Prefer this over naming a concrete decoder: SoundTrap file naming is
+inconsistent, so the extension is not a reliable signal.
 
 ```java
-import sud.edu.cornell.raven.x3a.X3Decoder;
-import sud.edu.cornell.raven.x3a.FileMetadata;
+import edu.cornell.raven.x3a.X3Readers;
+import edu.cornell.raven.x3a.X3SampleReader;
 
-try (X3Decoder decoder = new X3Decoder(Path.of("recording.sud"))) {
-    FileMetadata meta = decoder.metadata();     // sampleRate(), channels(), bitDepth(), xmlConfig()
-    long totalSamples = decoder.chunkIndex().totalSamples();
+try (X3SampleReader reader = X3Readers.open(Path.of("recording.sud"))) {
+    int channels = reader.channels();           // also sampleRate(), bitDepth(), totalSamples()
 
-    short[] window = new short[65536 * meta.channels()]; // allocate once, reuse per window
+    short[] window = new short[65536 * channels]; // allocate once, reuse per window
     long offset = 0;
-    while (offset < totalSamples) {
-        int got = decoder.decodeSamplesInt(offset, 65536, window);
+    while (offset < reader.totalSamples()) {
+        int got = reader.decodeSamplesInt(offset, 65536, window);
         if (got <= 0) break;
         // ...consume window[0, got * channels)...
         offset += got;
@@ -95,9 +101,18 @@ try (X3Decoder decoder = new X3Decoder(Path.of("recording.sud"))) {
 }
 ```
 
-`decodeSamplesFloat` is also available, normalizing to `[-1.0f, 1.0f]` on the
-fly. Both methods decode directly into a caller-owned buffer — no allocation
-on the steady-state path.
+Both readers index frame boundaries at open time, so reads are random-access:
+only the frames a window touches get decoded. `decodeSamplesFloat` is also
+available, normalizing to `[-1.0f, 1.0f]` on the fly. Both methods decode
+directly into a caller-owned buffer — no allocation on the steady-state path.
+
+Malformed framing or corrupt coded data surfaces as `X3FormatException`, an
+`IOException` subclass, so callers can distinguish a bad file from an I/O
+failure without catching runtime exceptions.
+
+Construct `sud.X3Decoder` or `X3ArchiveDecoder` directly when you already know
+the container and want its type-specific extras — `X3Decoder.metadata()`
+(device tags, `xmlConfig()`) or `X3ArchiveDecoder.xmlConfig()`.
 
 ### Converting `.wav` ↔ `.x3a`
 
@@ -107,14 +122,19 @@ import edu.cornell.raven.x3a.X3Files;
 X3Files.wavToX3a(Path.of("in.wav"), Path.of("out.x3a"));
 X3Files.x3aToWav(Path.of("out.x3a"), Path.of("roundtrip.wav"));
 
-// Or decode an archive already in memory:
+// Or decode an archive already in memory (whole file into one buffer — for large
+// archives prefer X3ArchiveDecoder and read bounded windows instead):
 X3Files.DecodedArchive dec = X3Files.decodeArchive(archiveBytes);
-// dec.sampleRate, dec.channels, dec.pcm (interleaved short[]), dec.xml (embedded config)
+// dec.sampleRate(), dec.channels(), dec.pcm() (interleaved short[]), dec.xml() (embedded config)
+
+// Metadata only, no PCM decode — works on both .x3a and .SUD:
+X3Files.X3Header header = X3Files.readHeader(Path.of("recording.sud"));
 ```
 
 ### Tuning decode concurrency
 
-Both `X3Decoder` and `X3Files.decodeArchive` accept a `DecodeOptions`:
+`X3ArchiveDecoder`, `sud.X3Decoder`, `X3Readers.open`, and
+`X3Files.decodeArchive` all accept a `DecodeOptions`:
 
 ```java
 DecodeOptions opts = DecodeOptions.defaults().withMaxConcurrency(2);
@@ -137,20 +157,23 @@ Hard performance rules for anyone touching decode/parse/math paths are in
 
 | Package | Role |
 | --- | --- |
-| `edu.cornell.raven.x3a` | Codec + pipeline: `BitstreamReader`/`Writer`, `X3AudioDecoder`/`Encoder`, `ChunkPipeline`, `X3Files` (wav↔x3a conversion) |
-| `edu.cornell.raven.sud` | `.SUD` container: `SudFileMapper`, `ChunkIndex`, `FileMetadata`, `TelemetryCallback`, facade `X3Decoder` |
+| `edu.cornell.raven.x3a` | Public API: `X3SampleReader`, `X3Readers`, `X3ArchiveDecoder`, `X3Files`, `X3AudioDecoder`/`Encoder`, `DecodeOptions`, `X3FormatException` |
+| `edu.cornell.raven.x3a.sud` | `.SUD` container: `SudFileMapper`, `FileMetadata`, `TelemetryCallback`, facade `X3Decoder` |
+| `edu.cornell.raven.x3a.internal` | Not exported: `BitstreamReader`/`Writer`, `ChunkPipeline`, `ChunkIndex`, `ArchiveIndex`, framing/CRC helpers |
 
 Dependency direction is one-way (`.sud` → core `x3a`), so the codec can be
 used standalone on bare `.x3a` archives without any SUD-container concept.
 
 **Key techniques:**
 
-- **Zero-copy file access** — `.SUD` files are mapped off-heap via
+- **Zero-copy file access** — `.SUD` and `.x3a` files are mapped off-heap via
   `FileChannel` + `Arena`/`MemorySegment` (FFM API); metadata and chunk
   indexing walk the mapped memory directly rather than copying into `byte[]`.
 - **In-memory chunk index** — a single pass builds a flat `long[]` index
   (`Sample_Offset`, `File_Byte_Offset`, `Chunk_Length`, `Frame_Timestamp` per
   chunk) enabling binary-search random seeking without on-disk sidecar files.
+  `ChunkIndex` does this for `.SUD` records and `ArchiveIndex` for `.x3a`
+  frames, sharing one layout so both feed the same `ChunkPipeline`.
 - **Allocation-free decode loops** — no heap allocation, boxing, or
   multi-dimensional arrays inside decode/math loops (flat interleaved
   `short[]`/`int[]` throughout); loops are kept branch-free and countable so
@@ -158,8 +181,9 @@ used standalone on bare `.x3a` archives without any SUD-container concept.
 - **Virtual-thread parallel decode** — independent chunks/frames (each holds
   its own filter state) decode concurrently via
   `Executors.newVirtualThreadPerTaskExecutor()`, gated by local + optional
-  process-wide `Semaphore` limits (`ChunkPipeline` for `.SUD`, the parallel
-  path in `X3Files.decodeArchive` for bare `.x3a`).
+  process-wide `Semaphore` limits (`ChunkPipeline` for windowed reads of either
+  container, the parallel path in `X3Files.decodeArchive` for whole-file
+  archive decode).
 
 
 ## Project layout

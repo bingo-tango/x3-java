@@ -1,8 +1,11 @@
-package edu.cornell.raven.x3a.internal;
+package edu.cornell.raven.x3a;
+
+import edu.cornell.raven.x3a.internal.DecodeScheduler;
 
 import java.util.concurrent.Semaphore;
 
-/// Decode concurrency and payload framing options for [ChunkPipeline] / the SUD facade.
+/// Decode concurrency and payload framing options for the chunk pipeline, [X3ArchiveDecoder],
+/// and the SUD facade.
 ///
 /// Immutable and built via `with*` methods so options can be shared/reused across
 /// decoders without aliasing surprises. Defaults leave headroom for multi-file hosts:

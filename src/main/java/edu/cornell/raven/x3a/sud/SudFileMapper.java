@@ -2,6 +2,7 @@ package edu.cornell.raven.x3a.sud;
 
 import edu.cornell.raven.x3a.internal.RecordHeader;
 
+import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -60,11 +61,16 @@ public final class SudFileMapper implements AutoCloseable {
 
     /// Maps `sudFilePath` read-only. Uses a shared [Arena] since chunk decode reads
     /// the mapping from multiple virtual worker threads.
-    public SudFileMapper(Path sudFilePath) throws Exception {
-        this.arena = Arena.ofShared();
+    public SudFileMapper(Path sudFilePath) throws IOException {
+        Arena openArena = Arena.ofShared();
         try (FileChannel channel = FileChannel.open(sudFilePath, StandardOpenOption.READ)) {
-            this.mappedFile = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size(), arena);
+            this.mappedFile = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size(), openArena);
+        } catch (IOException | RuntimeException e) {
+            // Otherwise a failed open leaks the shared arena's reservation.
+            openArena.close();
+            throw e;
         }
+        this.arena = openArena;
     }
 
     /// The zero-copy mapped file.

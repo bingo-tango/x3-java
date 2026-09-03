@@ -1,7 +1,7 @@
 package edu.cornell.raven.x3a.tools;
 
 import edu.cornell.raven.x3a.X3Files;
-import edu.cornell.raven.x3a.internal.DecodeOptions;
+import edu.cornell.raven.x3a.DecodeOptions;
 import edu.cornell.raven.x3a.sud.FileMetadata;
 import edu.cornell.raven.x3a.sud.X3Decoder;
 
@@ -289,7 +289,7 @@ public final class X3VerificationApp extends Application {
         try (X3Decoder decoder = new X3Decoder(input)) {
             FileMetadata metadata = decoder.metadata();
             int channels = Math.max(1, metadata.channels());
-            long total = decoder.chunkIndex().totalSamples();
+            long total = decoder.totalSamples();
 
             // XML is metadata recovered up front, before any PCM is decoded — write it
             // before the WAV so a reader sees the sidecar as soon as it appears on disk.
@@ -317,10 +317,10 @@ public final class X3VerificationApp extends Application {
         byte[] archive = Files.readAllBytes(input);
         X3Files.DecodedArchive decoded = X3Files.decodeArchive(archive);
 
-        writeXmlSidecar(wavOut, decoded.xml);
+        writeXmlSidecar(wavOut, decoded.xml());
 
-        try (StreamingWavWriter writer = new StreamingWavWriter(wavOut, decoded.sampleRate, decoded.channels)) {
-            writer.writeFrames(decoded.pcm, decoded.frames());
+        try (StreamingWavWriter writer = new StreamingWavWriter(wavOut, decoded.sampleRate(), decoded.channels())) {
+            writer.writeFrames(decoded.pcm(), decoded.frames());
         }
     }
 

@@ -1,13 +1,18 @@
 package edu.cornell.raven.x3a;
 
 import edu.cornell.raven.x3a.internal.*;
+import edu.cornell.raven.x3a.sud.FileMetadata;
 import edu.cornell.raven.x3a.sud.SudFileMapper;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -29,6 +34,9 @@ public final class X3Files {
     /// Below this many data frames, parallel fan-out is skipped (matches [ChunkPipeline]).
     private static final int PARALLEL_FRAME_FLOOR = 2;
 
+    /// X3 archives always code 16-bit PCM.
+    private static final int ARCHIVE_BIT_DEPTH = 16;
+
     private static final long NANOS_PER_SECOND = 1_000_000_000L;
 
     private static final Pattern FS = Pattern.compile("<FS[^>]*>(\\d+)</FS>", Pattern.CASE_INSENSITIVE);
@@ -41,144 +49,58 @@ public final class X3Files {
     }
 
     /// Quick metadata-only read without decoding PCM samples.
-    /// Extracts sample rate, channels, bit depth, frame count, and device ID from a `.x3a` file.
-    /// Works with both SUD-wrapped and plain X3 archives. Prefers SUD metadata when available.
+    /// Extracts sample rate, channels, bit depth, frame count, and device ID from a `.x3a` or
+    /// `.SUD` file, dispatching on the file's magic rather than its extension.
     /// Use this instead of [#decodeArchive(byte[])] when you only need format information.
-    public static X3Header readHeader(Path path) throws Exception {
-        byte[] archive = Files.readAllBytes(path);
-
-        // Check if this is a plain X3 archive (starts with X3ARCHIV)
-        if (startsWithX3Archive(archive)) {
-            // Parse X3 archive's embedded XML config
-            return readHeaderFromArchiveXml(archive);
+    ///
+    /// The file is memory-mapped and only its frame headers are walked, so cost scales with
+    /// frame count rather than file size.
+    ///
+    /// @throws X3FormatException if the file is neither a readable archive nor a `.SUD` container
+    /// @throws IOException if the file cannot be read
+    public static X3Header readHeader(Path path) throws IOException {
+        if (X3Readers.isArchive(path)) {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment mapped = map(path, arena);
+                ArchiveIndex index;
+                try {
+                    index = ArchiveIndex.build(mapped, X3AudioEncoder.DEFAULT_BLOCK_LEN,
+                            X3AudioEncoder.DEFAULT_RICE_ORDERS);
+                } catch (IllegalArgumentException e) {
+                    throw new X3FormatException("not a readable X3 archive: " + path, e);
+                }
+                return new X3Header(index.sampleRate(), index.channels(), ARCHIVE_BIT_DEPTH,
+                        index.totalSamples(), "UNKNOWN");
+            }
         }
 
-        // Otherwise try SUD metadata (for SoundTrap SUD files)
         try (SudFileMapper mapper = new SudFileMapper(path)) {
-            edu.cornell.raven.x3a.sud.FileMetadata sudMetadata = mapper.parseHeader();
-            long frameCount = getFrameCountFromArchive(archive);
+            FileMetadata sudMetadata = mapper.parseHeader();
+            // SUD frame counts live in the container's chunk records, not in X3 archive framing.
+            ChunkIndex chunkIndex = new ChunkIndex();
+            chunkIndex.build(mapper.mappedFile(), sudMetadata.sampleRate());
             return new X3Header(sudMetadata.sampleRate(), sudMetadata.channels(), sudMetadata.bitDepth(),
-                    frameCount, sudMetadata.deviceId());
+                    chunkIndex.totalSamples(), sudMetadata.deviceId());
         }
-    }
-
-    private static boolean startsWithX3Archive(byte[] data) {
-        return data.length >= X3FrameHeader.ARCHIVE_ID.length &&
-               data[0] == X3FrameHeader.ARCHIVE_ID[0] &&
-               data[1] == X3FrameHeader.ARCHIVE_ID[1] &&
-               data[2] == X3FrameHeader.ARCHIVE_ID[2] &&
-               data[3] == X3FrameHeader.ARCHIVE_ID[3] &&
-               data[4] == X3FrameHeader.ARCHIVE_ID[4] &&
-               data[5] == X3FrameHeader.ARCHIVE_ID[5] &&
-               data[6] == X3FrameHeader.ARCHIVE_ID[6] &&
-               data[7] == X3FrameHeader.ARCHIVE_ID[7];
-    }
-
-    /// Extracts metadata from a plain X3 archive's embedded XML config without decoding PCM.
-    private static X3Header readHeaderFromArchiveXml(byte[] archive) {
-        if (archive.length < X3FrameHeader.ARCHIVE_ID.length + X3FrameHeader.LENGTH) {
-            return new X3Header(0, 0, 0, 0, "UNKNOWN");
-        }
-        for (int i = 0; i < X3FrameHeader.ARCHIVE_ID.length; i++) {
-            if (archive[i] != X3FrameHeader.ARCHIVE_ID[i]) {
-                return new X3Header(0, 0, 0, 0, "UNKNOWN");
-            }
-        }
-
-        int pos = X3FrameHeader.ARCHIVE_ID.length;
-        X3FrameHeader xmlHdr = X3FrameHeader.decode(archive, pos);
-        pos += X3FrameHeader.LENGTH;
-        if (pos + xmlHdr.payloadLen > archive.length) {
-            return new X3Header(0, 0, 0, 0, "UNKNOWN");
-        }
-        String xml = new String(archive, pos, xmlHdr.payloadLen, StandardCharsets.US_ASCII);
-
-        int sampleRate = parseInt(FS, xml, -1);
-        int channels = -1;
-        int bitDepth = -1;
-        long frameCount = getFrameCountFromArchive(archive);
-
-        // For X3 archives created from WAV, channels are determined from the first data frame
-        pos += xmlHdr.payloadLen;
-        while (pos + X3FrameHeader.LENGTH <= archive.length) {
-            int key = X3FrameHeader.getBe16(archive, pos);
-            if (key != X3FrameHeader.KEY) {
-                break;
-            }
-            X3FrameHeader fh = X3FrameHeader.decode(archive, pos);
-            pos += X3FrameHeader.LENGTH;
-            if (fh.payloadLen <= 0 || pos + fh.payloadLen > archive.length) {
-                break;
-            }
-            if (fh.samples > 0) {
-                channels = Math.max(1, fh.channels);
-                bitDepth = 16; // X3 archives always encode 16-bit PCM
-                break;
-            }
-            pos += fh.payloadLen;
-        }
-
-        if (sampleRate < 0) sampleRate = 0;
-        if (channels < 0) channels = 0;
-        if (bitDepth < 0) bitDepth = 0;
-
-        return new X3Header(sampleRate, channels, bitDepth, frameCount, "UNKNOWN");
     }
 
     /// Returns the frame count (total audio samples / channel) without decoding the PCM payload.
     /// More efficient than [#decodeArchive(byte[])] for format detection when you only need frame count.
+    ///
+    /// @throws X3FormatException if the file is neither a readable archive nor a `.SUD` container
+    /// @throws IOException if the file cannot be read
     public static long getFrameCount(Path path) throws IOException {
-        byte[] archive = Files.readAllBytes(path);
-        return getFrameCountFromArchive(archive);
+        return readHeader(path).frames();
     }
 
-    /// Extracts frame count from an in-memory archive image without decoding samples.
-    private static long getFrameCountFromArchive(byte[] archive) {
-        if (archive.length < X3FrameHeader.ARCHIVE_ID.length + X3FrameHeader.LENGTH) {
-            return 0;
+    private static MemorySegment map(Path path, Arena arena) throws IOException {
+        try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
+            return channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size(), arena);
         }
-        for (int i = 0; i < X3FrameHeader.ARCHIVE_ID.length; i++) {
-            if (archive[i] != X3FrameHeader.ARCHIVE_ID[i]) {
-                return 0;
-            }
-        }
-
-        int pos = X3FrameHeader.ARCHIVE_ID.length;
-        X3FrameHeader xmlHdr = X3FrameHeader.decode(archive, pos);
-        pos += X3FrameHeader.LENGTH;
-        if (pos + xmlHdr.payloadLen > archive.length) {
-            return 0;
-        }
-        pos += xmlHdr.payloadLen;
-
-        long totalSamples = 0;
-        while (pos + X3FrameHeader.LENGTH <= archive.length) {
-            int key = X3FrameHeader.getBe16(archive, pos);
-            if (key != X3FrameHeader.KEY) {
-                break;
-            }
-            X3FrameHeader fh = X3FrameHeader.decode(archive, pos);
-            pos += X3FrameHeader.LENGTH;
-            if (fh.payloadLen <= 0 || pos + fh.payloadLen > archive.length) {
-                break;
-            }
-
-            if (fh.samples > 0) {
-                totalSamples += fh.samples;
-            }
-            pos += fh.payloadLen;
-        }
-
-        return totalSamples;
     }
 
     /// Converts a 16-bit PCM WAV file to an X3 archive (`.x3a`). Overwrites `x3aPath` if it exists.
     public static void wavToX3a(Path wavPath, Path x3aPath) throws IOException {
-        wav_to_x3a(wavPath, x3aPath);
-    }
-
-    /// Snake_case alias matching the x3-rust API name.
-    public static void wav_to_x3a(Path wavPath, Path x3aPath) throws IOException {
         WavPcm.WavData wav = WavPcm.read(wavPath);
         X3AudioEncoder encoder = new X3AudioEncoder();
         byte[] archive = encodeArchive(
@@ -192,14 +114,8 @@ public final class X3Files {
 
     /// Converts an X3 archive (`.x3a`) to a 16-bit PCM WAV file. Overwrites `wavPath` if it exists.
     public static void x3aToWav(Path x3aPath, Path wavPath) throws IOException {
-        x3a_to_wav(x3aPath, wavPath);
-    }
-
-    /// Snake_case alias matching the x3-rust API name.
-    public static void x3a_to_wav(Path x3aPath, Path wavPath) throws IOException {
-        byte[] all = Files.readAllBytes(x3aPath);
-        DecodedArchive dec = decodeArchive(all);
-        WavPcm.write(wavPath, dec.sampleRate, dec.channels, dec.pcm);
+        DecodedArchive dec = decodeArchive(Files.readAllBytes(x3aPath));
+        WavPcm.write(wavPath, dec.sampleRate(), dec.channels(), dec.pcm());
     }
 
     /// Builds a complete `.x3a` byte image from interleaved PCM.
@@ -249,7 +165,12 @@ public final class X3Files {
 
     /// Decodes a full archive image to interleaved PCM + stream metadata, using
     /// [DecodeOptions#defaults()] for frame-decode concurrency.
-    public static DecodedArchive decodeArchive(byte[] archive) {
+    ///
+    /// Decodes the entire archive into one buffer; for large files, prefer
+    /// [X3ArchiveDecoder] and read bounded windows instead.
+    ///
+    /// @throws X3FormatException if the image is not a well-formed X3 archive
+    public static DecodedArchive decodeArchive(byte[] archive) throws X3FormatException {
         return decodeArchive(archive, DecodeOptions.defaults());
     }
 
@@ -260,25 +181,30 @@ public final class X3Files {
     /// independent (each carries its own filter state), so above
     /// `options.maxConcurrency() > 1` they decode in parallel on virtual threads, gated
     /// by a local + optional shared [Semaphore] (mirrors [ChunkPipeline#decodeWindowInt]).
-    public static DecodedArchive decodeArchive(byte[] archive, DecodeOptions options) {
+    ///
+    /// Every frame's header and payload CRC is verified, unlike the lazier framing-only
+    /// validation [X3ArchiveDecoder] does at open time.
+    ///
+    /// @throws X3FormatException if the image is not a well-formed X3 archive
+    public static DecodedArchive decodeArchive(byte[] archive, DecodeOptions options) throws X3FormatException {
         if (archive.length < X3FrameHeader.ARCHIVE_ID.length + X3FrameHeader.LENGTH) {
-            throw new IllegalArgumentException("archive too small");
+            throw new X3FormatException("archive too small: " + archive.length + " bytes");
         }
         for (int i = 0; i < X3FrameHeader.ARCHIVE_ID.length; i++) {
             if (archive[i] != X3FrameHeader.ARCHIVE_ID[i]) {
-                throw new IllegalArgumentException("missing X3ARCHIV id");
+                throw new X3FormatException("missing X3ARCHIV id");
             }
         }
 
         int pos = X3FrameHeader.ARCHIVE_ID.length;
-        X3FrameHeader xmlHdr = X3FrameHeader.decode(archive, pos);
+        X3FrameHeader xmlHdr = frameHeaderAt(archive, pos);
         pos += X3FrameHeader.LENGTH;
         if (pos + xmlHdr.payloadLen > archive.length) {
-            throw new IllegalArgumentException("XML payload truncated");
+            throw new X3FormatException("XML payload truncated");
         }
         int gotCrc = Crc16.crc(archive, pos, xmlHdr.payloadLen);
         if (gotCrc != xmlHdr.payloadCrc) {
-            throw new IllegalArgumentException("XML payload CRC mismatch");
+            throw new X3FormatException("XML payload CRC mismatch");
         }
         String xml = new String(archive, pos, xmlHdr.payloadLen, StandardCharsets.US_ASCII);
         pos += xmlHdr.payloadLen;
@@ -305,14 +231,14 @@ public final class X3Files {
             if (key != X3FrameHeader.KEY) {
                 break;
             }
-            X3FrameHeader fh = X3FrameHeader.decode(archive, pos);
+            X3FrameHeader fh = frameHeaderAt(archive, pos);
             pos += X3FrameHeader.LENGTH;
             if (fh.payloadLen <= 0 || pos + fh.payloadLen > archive.length) {
                 break;
             }
             int pcrc = Crc16.crc(archive, pos, fh.payloadLen);
             if (pcrc != fh.payloadCrc) {
-                throw new IllegalArgumentException("frame payload CRC mismatch at " + (pos - X3FrameHeader.LENGTH));
+                throw new X3FormatException("frame payload CRC mismatch at " + (pos - X3FrameHeader.LENGTH));
             }
 
             if (fh.samples > 0) {
@@ -350,6 +276,16 @@ public final class X3Files {
         }
 
         return new DecodedArchive(sampleRate, channels, pcm, xml);
+    }
+
+    /// Reads and validates a frame header, reporting malformed framing as a format error
+    /// rather than the [IllegalArgumentException] the low-level decoder raises.
+    private static X3FrameHeader frameHeaderAt(byte[] archive, int off) throws X3FormatException {
+        try {
+            return X3FrameHeader.decode(archive, off);
+        } catch (IllegalArgumentException e) {
+            throw new X3FormatException("malformed frame header at " + off, e);
+        }
     }
 
     private static void decodeFramesParallel(byte[] archive, X3AudioDecoder decoder, int frameCount,
@@ -430,23 +366,16 @@ public final class X3Files {
 
     /// Result of [#decodeArchive(byte[])]: interleaved PCM plus the stream metadata
     /// recovered from the archive's config frame.
-    public static final class DecodedArchive {
-        /// Sample rate in Hz, parsed from the embedded `<FS>` config.
-        public final int sampleRate;
-        /// Channel count, taken from the first data frame's header.
-        public final int channels;
-        /// Interleaved decoded PCM samples.
-        public final short[] pcm;
-        /// Embedded `<X3ARCH>`/`<CFG>` config XML, recovered verbatim from the archive.
-        public final String xml;
-
-        public DecodedArchive(int sampleRate, int channels, short[] pcm, String xml) {
-            this.sampleRate = sampleRate;
-            this.channels = channels;
-            this.pcm = pcm;
-            this.xml = xml;
-        }
-
+    public record DecodedArchive(
+            /// Sample rate in Hz, parsed from the embedded `<FS>` config.
+            int sampleRate,
+            /// Channel count, taken from the first data frame's header.
+            int channels,
+            /// Interleaved decoded PCM samples.
+            short[] pcm,
+            /// Embedded `<X3ARCH>`/`<CFG>` config XML, recovered verbatim from the archive.
+            String xml
+    ) {
         /// `pcm.length / channels`.
         public int frames() {
             return pcm.length / channels;

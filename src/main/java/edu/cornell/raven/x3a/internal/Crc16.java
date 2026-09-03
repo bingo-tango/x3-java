@@ -1,5 +1,8 @@
 package edu.cornell.raven.x3a.internal;
 
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+
 /// CRC-16 (XMODEM/CCITT, poly `0x1021`) matching x3-rust / x3new.m, so archive and frame
 /// checksums produced here validate against the reference tooling.
 public final class Crc16 {
@@ -49,6 +52,16 @@ public final class Crc16 {
         int c = INIT;
         for (int i = 0; i < len; i++) {
             c = update(c, data[off + i] & 0xff);
+        }
+        return c;
+    }
+
+    /// CRC of a mapped-memory range, from [#INIT] — lets container indexing validate frames
+    /// straight off the mapping instead of copying them onto the heap.
+    public static int crc(MemorySegment data, long off, int len) {
+        int c = INIT;
+        for (int i = 0; i < len; i++) {
+            c = update(c, data.get(ValueLayout.JAVA_BYTE, off + i) & 0xff);
         }
         return c;
     }

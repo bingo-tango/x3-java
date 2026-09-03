@@ -1,5 +1,8 @@
 package edu.cornell.raven.x3a.internal;
 
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+
 /// 20-byte big-endian frame header prefixing every frame in an X3 archive (`.x3a`) —
 /// the "x3" key plus header/payload CRCs let [X3Files#decodeArchive(byte[])] detect a
 /// truncated or corrupted archive before touching frame payload bytes.
@@ -96,6 +99,32 @@ public final class X3FrameHeader {
         return new X3FrameHeader(sourceId, channels, samples, payloadLen, time, payloadCrc);
     }
 
+    /// Mapped-memory counterpart of [#decode(byte[],int)], for indexing an archive without
+    /// copying it onto the heap.
+    ///
+    /// @throws IllegalArgumentException if truncated, the key doesn't match, or the CRC fails
+    public static X3FrameHeader decode(MemorySegment segment, long off) {
+        if (segment.byteSize() - off < LENGTH) {
+            throw new IllegalArgumentException("frame header truncated at " + off);
+        }
+        int key = getBe16(segment, off + P_KEY);
+        if (key != KEY) {
+            throw new IllegalArgumentException("invalid frame key at " + off + ": 0x" + Integer.toHexString(key));
+        }
+        int headerCrc = getBe16(segment, off + P_HEADER_CRC);
+        int expect = Crc16.crc(segment, off, P_HEADER_CRC);
+        if (headerCrc != expect) {
+            throw new IllegalArgumentException("frame header CRC mismatch at " + off);
+        }
+        int sourceId = segment.get(ValueLayout.JAVA_BYTE, off + P_SOURCE_ID) & 0xff;
+        int channels = segment.get(ValueLayout.JAVA_BYTE, off + P_CHANNELS) & 0xff;
+        int samples = getBe16(segment, off + P_SAMPLES);
+        int payloadLen = getBe16(segment, off + P_PAYLOAD_SIZE);
+        long time = getBe64(segment, off + P_TIME);
+        int payloadCrc = getBe16(segment, off + P_PAYLOAD_CRC);
+        return new X3FrameHeader(sourceId, channels, samples, payloadLen, time, payloadCrc);
+    }
+
     static void putBe16(byte[] b, int off, int v) {
         b[off] = (byte) (v >>> 8);
         b[off + 1] = (byte) v;
@@ -115,6 +144,18 @@ public final class X3FrameHeader {
         long v = 0;
         for (int i = 0; i < 8; i++) {
             v = (v << 8) | (b[off + i] & 0xff);
+        }
+        return v;
+    }
+
+    public static int getBe16(MemorySegment s, long off) {
+        return ((s.get(ValueLayout.JAVA_BYTE, off) & 0xff) << 8) | (s.get(ValueLayout.JAVA_BYTE, off + 1) & 0xff);
+    }
+
+    static long getBe64(MemorySegment s, long off) {
+        long v = 0;
+        for (int i = 0; i < 8; i++) {
+            v = (v << 8) | (s.get(ValueLayout.JAVA_BYTE, off + i) & 0xff);
         }
         return v;
     }

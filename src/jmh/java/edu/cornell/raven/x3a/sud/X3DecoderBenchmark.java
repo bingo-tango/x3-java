@@ -52,13 +52,13 @@ public class X3DecoderBenchmark {
 
     /// Int read path.
     @Benchmark
-    public void decodeSamplesInt(Blackhole blackhole) {
+    public void decodeSamplesInt(Blackhole blackhole) throws Exception {
         blackhole.consume(decoder.decodeSamplesInt(0L, intDest.length, intDest));
     }
 
     /// Float read path, including normalization.
     @Benchmark
-    public void decodeSamplesFloat(Blackhole blackhole) {
+    public void decodeSamplesFloat(Blackhole blackhole) throws Exception {
         blackhole.consume(decoder.decodeSamplesFloat(0L, floatDest.length, floatDest));
     }
 }

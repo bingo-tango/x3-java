@@ -1,5 +1,6 @@
 package edu.cornell.raven.x3a.internal;
 
+import edu.cornell.raven.x3a.DecodeOptions;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;

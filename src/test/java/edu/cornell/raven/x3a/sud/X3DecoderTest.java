@@ -1,6 +1,6 @@
 package edu.cornell.raven.x3a.sud;
 
-import edu.cornell.raven.x3a.internal.DecodeOptions;
+import edu.cornell.raven.x3a.DecodeOptions;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -54,7 +54,7 @@ class X3DecoderTest {
         try (X3Decoder decoder = new X3Decoder(fixture)) {
             assertEquals(48_000, decoder.metadata().sampleRate());
             assertEquals(1, decoder.metadata().channels());
-            assertEquals(172_813_552L, decoder.chunkIndex().totalSamples());
+            assertEquals(172_813_552L, decoder.totalSamples());
 
             int n = 4096;
             short[] pcm = new short[n];

@@ -1,5 +1,6 @@
 package edu.cornell.raven.x3a.internal;
 
+import edu.cornell.raven.x3a.DecodeOptions;
 import edu.cornell.raven.x3a.X3AudioDecoder;
 
 import java.lang.foreign.MemorySegment;

@@ -1,11 +1,14 @@
 package edu.cornell.raven.x3a.sud;
 
+import edu.cornell.raven.x3a.DecodeOptions;
+import edu.cornell.raven.x3a.X3AudioDecoder;
+import edu.cornell.raven.x3a.X3FormatException;
+import edu.cornell.raven.x3a.X3SampleReader;
 import edu.cornell.raven.x3a.internal.ChunkIndex;
 import edu.cornell.raven.x3a.internal.ChunkPipeline;
-import edu.cornell.raven.x3a.internal.DecodeOptions;
-import edu.cornell.raven.x3a.X3AudioDecoder;
 import edu.cornell.raven.x3a.internal.RecordHeader;
 
+import java.io.IOException;
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Path;
 import java.util.regex.Matcher;
@@ -14,9 +17,12 @@ import java.util.regex.Pattern;
 /// Facade tying together `.SUD` file mapping, chunk indexing, and X3 decode into a
 /// single random-access handle for one file.
 ///
+/// The container-format sibling of [edu.cornell.raven.x3a.X3ArchiveDecoder]; both implement
+/// [X3SampleReader], so hosts that only want PCM can accept either.
+///
 /// Construction eagerly maps the file and builds the chunk index so [#decodeSamplesInt]
 /// / [#decodeSamplesFloat] can seek and decode without further I/O setup cost.
-public class X3Decoder implements AutoCloseable {
+public class X3Decoder implements X3SampleReader {
 
     private static final float SCALE_TO_UNIT = 1.0f / 32768.0f;
     private static final Pattern BLKLEN = Pattern.compile("<BLKLEN>\\s*(\\d+)\\s*</BLKLEN>");
@@ -36,15 +42,21 @@ public class X3Decoder implements AutoCloseable {
     /// Reusable int→float scratch for [#decodeSamplesFloat]; grows once, then stays sized.
     private short[] floatScratch = new short[0];
 
+    private boolean closed;
+
     /// Opens `sudFilePath` with [DecodeOptions#sudDefaults] concurrency.
-    public X3Decoder(Path sudFilePath) throws Exception {
+    ///
+    /// @throws IOException if the file cannot be opened or mapped
+    public X3Decoder(Path sudFilePath) throws IOException {
         this(sudFilePath, DecodeOptions.sudDefaults((int) RecordHeader.BYTES));
     }
 
     /// Opens `sudFilePath`, mapping it, parsing its metadata, and building its chunk
     /// index. SUD container framing (record header skip + pair-swap) is applied
     /// regardless of `options`; only concurrency tuning is caller-controlled.
-    public X3Decoder(Path sudFilePath, DecodeOptions options) throws Exception {
+    ///
+    /// @throws IOException if the file cannot be opened or mapped
+    public X3Decoder(Path sudFilePath, DecodeOptions options) throws IOException {
         if (options == null) {
             throw new IllegalArgumentException("options must not be null");
         }
@@ -78,9 +90,30 @@ public class X3Decoder implements AutoCloseable {
         return metadata;
     }
 
+    @Override
+    public int sampleRate() {
+        return metadata.sampleRate();
+    }
+
+    @Override
+    public int channels() {
+        return channels;
+    }
+
+    @Override
+    public int bitDepth() {
+        return metadata.bitDepth();
+    }
+
+    @Override
+    public long totalSamples() {
+        return chunkIndex.totalSamples();
+    }
+
     /// In-memory chunk index, allowing random seeking by sample without `.sudx`
-    /// sidecar files.
-    public ChunkIndex chunkIndex() {
+    /// sidecar files. Package-scoped: [ChunkIndex] is an internal type, and
+    /// [#totalSamples()] covers what callers outside the library need from it.
+    ChunkIndex chunkIndex() {
         return chunkIndex;
     }
 
@@ -89,8 +122,9 @@ public class X3Decoder implements AutoCloseable {
         return options;
     }
 
-    /// Underlying chunk pipeline (tests / diagnostics).
-    public ChunkPipeline pipeline() {
+    /// Underlying chunk pipeline (tests / diagnostics). Package-scoped, since
+    /// [ChunkPipeline] is an internal type.
+    ChunkPipeline pipeline() {
         return pipeline;
     }
 
@@ -99,15 +133,21 @@ public class X3Decoder implements AutoCloseable {
     /// the buffer so repeated reads stay allocation-free.
     ///
     /// @return number of frames written
-    public int decodeSamplesInt(long startSample, int length, short[] destIntBuffer) {
-        return pipeline.decodeWindowInt(startSample, length, destIntBuffer);
+    @Override
+    public int decodeSamplesInt(long startSample, int length, short[] destIntBuffer) throws IOException {
+        try {
+            return pipeline.decodeWindowInt(startSample, length, destIntBuffer);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            throw new X3FormatException("corrupt SUD chunk data at sample " + startSample, e);
+        }
     }
 
     /// Same as [#decodeSamplesInt] but normalizes into `[-1, 1)` floats. Internal
     /// int scratch grows once to the largest requested window, then stays allocation-free.
     ///
     /// @return number of frames written
-    public int decodeSamplesFloat(long startSample, int length, float[] destFloatBuffer) {
+    @Override
+    public int decodeSamplesFloat(long startSample, int length, float[] destFloatBuffer) throws IOException {
         if (length <= 0) {
             return 0;
         }
@@ -141,9 +181,12 @@ public class X3Decoder implements AutoCloseable {
         return defaultLen;
     }
 
-    /// Unmaps the underlying file.
+    /// Unmaps the underlying file. Idempotent.
     @Override
     public void close() {
-        mapper.close();
+        if (!closed) {
+            closed = true;
+            mapper.close();
+        }
     }
 }

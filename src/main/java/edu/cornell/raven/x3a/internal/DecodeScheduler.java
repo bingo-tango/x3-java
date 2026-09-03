@@ -32,12 +32,14 @@ public final class DecodeScheduler {
         return Math.clamp(cores / 2, 1, 4);
     }
 
-    /// Shared limiter used when [DecodeOptions#useSharedLimiter()] is true.
+    /// Shared limiter used when [edu.cornell.raven.x3a.DecodeOptions#useSharedLimiter()] is true.
     public static Semaphore sharedLimiter() {
         return SHARED;
     }
 
-    static int positiveIntProperty(String key, int defaultValue) {
+    /// Reads a positive `int` system property, falling back to `defaultValue` when unset or
+    /// unparseable. Public so [edu.cornell.raven.x3a.DecodeOptions] can share the same parsing.
+    public static int positiveIntProperty(String key, int defaultValue) {
         String raw = System.getProperty(key);
         if (raw == null || raw.isBlank()) {
             return defaultValue;
