@@ -121,6 +121,78 @@ class X3BulkCodecTest {
         assertThrows(X3FormatException.class, () -> X3BulkDecoder.decode(archive));
     }
 
+    /// Enough frames to fan out over several batches, and a signal that mixes Rice and BFP
+    /// blocks so payload lengths vary between frames.
+    private static short[] multiFramePcm(int channels) {
+        int frames = new X3FrameEncoder().samplesPerFrame() * 5 + 137;
+        short[] pcm = new short[frames * channels];
+        int state = 0x0f1e_2d3c;
+        for (int i = 0; i < pcm.length; i++) {
+            state = state * 1_103_515_245 + 12_345;
+            pcm[i] = (short) (Math.sin(i * 0.003) * 9000 + ((state >> 20) & 0xff));
+        }
+        return pcm;
+    }
+
+    private static byte[] encodeWithConcurrency(short[] pcm, int frames, int channels, String concurrency) {
+        String prev = System.setProperty("x3a.encode.maxConcurrency", concurrency);
+        try {
+            return X3BulkEncoder.encode(pcm, frames, channels, 48000, new X3FrameEncoder());
+        } finally {
+            if (prev == null) {
+                System.clearProperty("x3a.encode.maxConcurrency");
+            } else {
+                System.setProperty("x3a.encode.maxConcurrency", prev);
+            }
+        }
+    }
+
+    /// Frames are encoded concurrently but must be emitted in order, so the archive has to be
+    /// byte-identical to the single-threaded encode.
+    @Test
+    void parallelEncodeMatchesSequentialByteForByte() {
+        for (int channels : new int[] {1, 2}) {
+            short[] pcm = multiFramePcm(channels);
+            int frames = pcm.length / channels;
+
+            byte[] sequential = encodeWithConcurrency(pcm, frames, channels, "1");
+            byte[] parallel = encodeWithConcurrency(pcm, frames, channels, "4");
+
+            assertArrayEquals(sequential, parallel, channels + "-channel archive");
+        }
+    }
+
+    /// The streaming path shares the frame driver with the heap path; same bytes, no image.
+    @Test
+    void encodeToStreamMatchesEncodeToArray() throws Exception {
+        short[] pcm = multiFramePcm(1);
+        int frames = pcm.length;
+
+        byte[] image = X3BulkEncoder.encode(pcm, frames, 1, 48000, new X3FrameEncoder());
+        var buffer = new java.io.ByteArrayOutputStream();
+        X3BulkEncoder.encodeTo(buffer, pcm, frames, 1, 48000, new X3FrameEncoder());
+
+        assertArrayEquals(image, buffer.toByteArray());
+    }
+
+    /// A multi-frame, multi-channel archive must survive the round trip exactly — the check
+    /// that concurrent frame encoding never crosses residual state between frames.
+    @Test
+    void multiFrameRoundTripIsLossless() throws Exception {
+        for (int channels : new int[] {1, 2}) {
+            short[] pcm = multiFramePcm(channels);
+            int frames = pcm.length / channels;
+
+            byte[] archive = X3BulkEncoder.encode(pcm, frames, channels, 48000, new X3FrameEncoder());
+            X3BulkDecoder.DecodedArchive decoded = X3BulkDecoder.decode(archive,
+                    DecodeOptions.defaults().withVerifyPayloadCrc(true));
+
+            assertEquals(channels, decoded.channels());
+            assertEquals(frames, decoded.frames());
+            assertArrayEquals(pcm, decoded.pcm(), channels + "-channel round trip");
+        }
+    }
+
     @Test
     void nonArchiveRejectedAsFormatError() {
         byte[] junk = "this is not an X3 archive, not even close".getBytes();

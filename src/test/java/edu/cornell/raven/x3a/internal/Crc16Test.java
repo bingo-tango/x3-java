@@ -34,4 +34,38 @@ class Crc16Test {
         };
         assertEquals(2073, Crc16.crc(payload));
     }
+
+    /// The sliced loop must agree with the byte-at-a-time fold at every length, including the
+    /// ones that leave a 1-3 byte tail.
+    @Test
+    void slicedCrcMatchesByteAtATimeForEveryLength() {
+        byte[] data = new byte[300];
+        int state = 0x1357_9bdf;
+        for (int i = 0; i < data.length; i++) {
+            state = state * 1_103_515_245 + 12_345;
+            data[i] = (byte) (state >>> 19);
+        }
+        for (int len = 0; len <= data.length; len++) {
+            int expected = Crc16.INIT;
+            for (int i = 0; i < len; i++) {
+                expected = Crc16.update(expected, data[i] & 0xff);
+            }
+            assertEquals(expected, Crc16.crc(data, 0, len), "length " + len);
+        }
+    }
+
+    /// Folding in two calls must equal folding in one, so a producer can checksum its output
+    /// incrementally as it commits bytes.
+    @Test
+    void continuationMatchesSinglePass() {
+        byte[] data = new byte[97];
+        for (int i = 0; i < data.length; i++) {
+            data[i] = (byte) (i * 7 + 3);
+        }
+        int whole = Crc16.crc(data, 0, data.length);
+        for (int split : new int[] {0, 1, 3, 4, 5, 32, 96, 97}) {
+            int part = Crc16.crc(Crc16.INIT, data, 0, split);
+            assertEquals(whole, Crc16.crc(part, data, split, data.length - split), "split " + split);
+        }
+    }
 }

@@ -83,6 +83,31 @@ public final class X3FrameEncoder {
         return new int[] {thresholds[0], thresholds[1], thresholds[2]};
     }
 
+    /// Stateless copy for parallel frame tasks — each task needs its own [#diffScratch] so
+    /// concurrent encodes don't clobber each other's residual buffer.
+    public X3FrameEncoder newInstance() {
+        return new X3FrameEncoder(blockLen, blocksPerFrame, riceOrders, thresholds);
+    }
+
+    /// Upper bound on the payload [#encodeFrame] produces for `frames × channels` samples,
+    /// so a caller can pre-size a [BitstreamWriter] (or an output slot) and never pay a
+    /// growth copy.
+    ///
+    /// The bound is the BFP pass-through worst case: every block spends a 6-bit header plus
+    /// 16 bits per sample, which no rice path can exceed — the encoder only reaches for rice
+    /// when residual magnitudes fall under [#thresholds].
+    public int maxPayloadBytes(int frames, int channels) {
+        if (frames <= 0 || channels <= 0) {
+            return 0;
+        }
+        // One block round per channel per blockLen samples after the raw first sample.
+        long rounds = frames <= 1 ? 0 : (frames - 2) / blockLen + 1;
+        long bits = 16L * channels                       // filter state
+                + rounds * channels * 6L                 // block headers
+                + 16L * channels * (frames - 1);         // worst-case sample payload
+        return (int) ((bits + 7) / 8) + 1;               // + word-align pad
+    }
+
     /// Encodes one frame of interleaved PCM into a fresh, word-aligned bit packer.
     ///
     /// @param pcm       interleaved samples
@@ -91,7 +116,7 @@ public final class X3FrameEncoder {
     /// @param channels  channel count
     /// @return packed payload bytes + CRC state in the writer
     public BitstreamWriter encodeFrame(short[] pcm, int offset, int frames, int channels) {
-        BitstreamWriter bp = new BitstreamWriter(Math.max(64, frames * channels));
+        BitstreamWriter bp = new BitstreamWriter(Math.max(64, maxPayloadBytes(frames, channels)));
         encodeFrame(pcm, offset, frames, channels, bp);
         return bp;
     }
@@ -125,13 +150,22 @@ public final class X3FrameEncoder {
             for (int ch = 0; ch < channels; ch++) {
                 short last = pcm[readBase - channels + ch];
                 int p = readBase + ch;
+                // Residuals and their peak magnitude in one pass — the block coder needs
+                // maxAbs to pick a code, and a second walk over diffScratch just to find it
+                // doubles the traffic over the hottest array in the encoder.
+                int maxAbs = 0;
                 for (int i = 0; i < n; i++) {
                     short s = pcm[p];
-                    diffScratch[i] = (int) s - (int) last;
+                    int d = (int) s - (int) last;
+                    diffScratch[i] = d;
+                    int a = d < 0 ? -d : d;
+                    if (a > maxAbs) {
+                        maxAbs = a;
+                    }
                     last = s;
                     p += channels;
                 }
-                encodeBlock(bp, diffScratch, n, pcm, readBase + ch, channels);
+                encodeBlock(bp, diffScratch, n, maxAbs, pcm, readBase + ch, channels);
             }
             framesDone += n;
             readBase += n * channels;
@@ -140,18 +174,10 @@ public final class X3FrameEncoder {
     }
 
     /// Selects rice / BFP / pass-through for one channel block of residuals.
-    void encodeBlock(BitstreamWriter bp, int[] diffs, int n, short[] pcm, int firstSampleIndex, int stride) {
-        int maxAbs = 0;
-        for (int i = 0; i < n; i++) {
-            int a = diffs[i];
-            if (a < 0) {
-                a = -a;
-            }
-            if (a > maxAbs) {
-                maxAbs = a;
-            }
-        }
-
+    ///
+    /// @param maxAbs peak `|diffs[i]|` over the block, computed by the caller's residual pass
+    void encodeBlock(BitstreamWriter bp, int[] diffs, int n, int maxAbs,
+                     short[] pcm, int firstSampleIndex, int stride) {
         if (maxAbs <= thresholds[2]) {
             int ftype = 0;
             for (int t = 0; t < 3; t++) {
@@ -185,15 +211,31 @@ public final class X3FrameEncoder {
     }
 
     /// Packs residuals with the given rice order, matching [X3FrameDecoder]'s unpack.
+    ///
+    /// Order 0 is unary only. For higher orders the unary run, its terminating one-bit, and
+    /// the suffix form a single code word, so they go out in one [BitstreamWriter#writeBits]
+    /// call — the decoder already reads them back that way (`countZeroBits` then one combined
+    /// `readBits`). Only a code too wide for a 32-bit write falls back to the split path,
+    /// which the thresholds keep out of reach in practice.
     static void packRice(BitstreamWriter bp, int[] diffs, int n, int riceOrder) {
+        if (riceOrder == 0) {
+            for (int i = 0; i < n; i++) {
+                // zeros zero-bits then a terminating 1
+                bp.writeBits(1, residualToRiceIndex(diffs[i]) + 1);
+            }
+            return;
+        }
+        final int suffixMask = (1 << riceOrder) - 1;
+        final int stopBit = 1 << riceOrder;
         for (int i = 0; i < n; i++) {
             int index = residualToRiceIndex(diffs[i]);
-            int zeros = riceOrder == 0 ? index : (index >>> riceOrder);
-            int suffix = riceOrder == 0 ? 0 : (index & ((1 << riceOrder) - 1));
-            // zeros zero-bits then a terminating 1
-            bp.writeBits(1, zeros + 1);
-            if (riceOrder > 0) {
-                bp.writeBits(suffix, riceOrder);
+            int zeros = index >>> riceOrder;
+            int width = zeros + 1 + riceOrder;
+            if (width <= 32) {
+                bp.writeBits(stopBit | (index & suffixMask), width);
+            } else {
+                bp.writeBits(1, zeros + 1);
+                bp.writeBits(index & suffixMask, riceOrder);
             }
         }
     }

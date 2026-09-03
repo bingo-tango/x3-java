@@ -1,16 +1,43 @@
 package edu.cornell.raven.x3a.internal;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
+import java.nio.ByteOrder;
+
 /// MSB-first variable-bit writer, mirroring [BitstreamReader]'s bit order.
 ///
-/// Tracks a running CRC-16 over flushed bytes as encoding proceeds, so an X3 frame
-/// header's payload CRC is ready via [#crc()] without a second pass over the buffer.
+/// Bits accumulate left-aligned in a 64-bit register and are committed to the buffer four
+/// bytes at a time through a big-endian [VarHandle] — the encode-side mirror of the reader's
+/// 32-bit refill window. So the per-byte work the naive shape implies (a capacity check, a
+/// store, and a CRC fold for every eight bits) happens once per word instead, and crossing a
+/// byte boundary is a shift rather than a recursive call.
+///
+/// The running CRC-16 an X3 frame header needs is still available from [#crc()] without a
+/// second pass, but it is folded in batches over committed bytes rather than inside
+/// [#writeBits], keeping the checksum out of the bit-packing loop.
 public final class BitstreamWriter {
+
+    /// Bits committed per [#commitWord] store.
+    private static final int WORD_BITS = 32;
+    /// Bytes committed per [#commitWord] store.
+    private static final int WORD_BYTES = 4;
+
+    /// Unaligned big-endian `int` stores into [#buf]; plain `set` has no alignment requirement.
+    private static final VarHandle INT_BE =
+            MethodHandles.byteArrayViewVarHandle(int[].class, ByteOrder.BIG_ENDIAN);
 
     private byte[] buf;
     private int byteLen;
-    private int scratch;
-    private int bitsInScratch;
+
+    /// Pending bits, left-aligned: the next bit written lands at position `63 - bitsInAcc`,
+    /// and everything below that is zero.
+    private long acc;
+    /// Valid bits in [#acc]; at most `WORD_BITS - 1` on entry to [#writeBits].
+    private int bitsInAcc;
+
     private int crc;
+    /// Bytes of [#buf] already folded into [#crc].
+    private int crcBytes;
 
     /// Starts with a 256-byte buffer, growing as needed.
     public BitstreamWriter() {
@@ -21,20 +48,20 @@ public final class BitstreamWriter {
     ///
     /// @param initialCapacity size hint to avoid buffer growth for known-size frames
     public BitstreamWriter(int initialCapacity) {
-        this.buf = new byte[Math.max(16, initialCapacity)];
-        this.byteLen = 0;
-        this.scratch = 0;
-        this.bitsInScratch = 0;
-        this.crc = Crc16.INIT;
+        // WORD_BYTES of headroom so a word commit at the very end of a pre-sized frame
+        // still lands without a growth copy.
+        this.buf = new byte[Math.max(16, initialCapacity) + WORD_BYTES];
+        reset();
     }
 
     /// Rewinds to empty (including the CRC) so one writer instance can be reused across
     /// frames instead of allocating a new one each time.
     public void reset() {
         byteLen = 0;
-        scratch = 0;
-        bitsInScratch = 0;
+        acc = 0L;
+        bitsInAcc = 0;
         crc = Crc16.INIT;
+        crcBytes = 0;
     }
 
     /// Writes the low `width` bits of `value` MSB-first (1..32).
@@ -42,29 +69,23 @@ public final class BitstreamWriter {
         if (width <= 0 || width > 32) {
             throw new IllegalArgumentException("width must be in 1..32");
         }
-        int mask = (width == 32) ? -1 : ((1 << width) - 1);
-        value &= mask;
-
-        int rem = 8 - bitsInScratch;
-        if (width == rem) {
-            scratch = (scratch << width) | value;
-            flushByte();
-        } else if (width < rem) {
-            scratch = (scratch << width) | value;
-            bitsInScratch += width;
-        } else {
-            int shift = width - rem;
-            scratch = (scratch << rem) | (value >>> shift);
-            flushByte();
-            writeBits(value, shift);
+        long masked = value & ((1L << width) - 1);
+        // bitsInAcc <= 31 and width <= 32, so the shift distance stays in 1..63.
+        acc |= masked << (64 - bitsInAcc - width);
+        bitsInAcc += width;
+        if (bitsInAcc >= WORD_BITS) {
+            commitWord();
         }
     }
 
     /// Flushes any partial byte, zero-padding the low bits, without forcing even length.
     public void flush() {
-        if (bitsInScratch != 0) {
-            scratch <<= (8 - bitsInScratch);
-            flushByte();
+        commitWholeBytes();
+        if (bitsInAcc != 0) {
+            ensureCapacity(byteLen + 1);
+            buf[byteLen++] = (byte) (acc >>> 56);
+            acc = 0L;
+            bitsInAcc = 0;
         }
     }
 
@@ -72,23 +93,30 @@ public final class BitstreamWriter {
     public void wordAlign() {
         flush();
         if ((byteLen & 1) != 0) {
-            scratch = 0;
-            flushByte();
+            ensureCapacity(byteLen + 1);
+            buf[byteLen++] = 0;
         }
     }
 
-    /// Bytes flushed so far; excludes any unflushed partial byte in scratch.
+    /// Bytes committed so far; excludes any unflushed partial byte still in the accumulator.
     public int byteLength() {
+        commitWholeBytes();
         return byteLen;
     }
 
-    /// Running CRC-16 over flushed bytes, for the frame header's payload CRC field.
+    /// Running CRC-16 over committed bytes, for the frame header's payload CRC field.
     public int crc() {
+        commitWholeBytes();
+        if (crcBytes < byteLen) {
+            crc = Crc16.crc(crc, buf, crcBytes, byteLen - crcBytes);
+            crcBytes = byteLen;
+        }
         return crc & 0xffff;
     }
 
-    /// Snapshot of packed bytes so far (excludes unflushed scratch bits).
+    /// Snapshot of packed bytes so far (excludes an unflushed partial byte).
     public byte[] toByteArray() {
+        commitWholeBytes();
         byte[] out = new byte[byteLen];
         System.arraycopy(buf, 0, out, 0, byteLen);
         return out;
@@ -96,23 +124,45 @@ public final class BitstreamWriter {
 
     /// Copies packed bytes into `dest[off..)` without an intermediate array; returns byte count.
     public int copyTo(byte[] dest, int off) {
+        commitWholeBytes();
         System.arraycopy(buf, 0, dest, off, byteLen);
         return byteLen;
     }
 
-    private void flushByte() {
-        ensureCapacity(byteLen + 1);
-        int b = scratch & 0xff;
-        buf[byteLen++] = (byte) b;
-        crc = Crc16.update(crc, b);
-        scratch = 0;
-        bitsInScratch = 0;
+    /// Commits the pending word: one big-endian store, one bounds check, no CRC work.
+    private void commitWord() {
+        if (byteLen + WORD_BYTES > buf.length) {
+            grow(byteLen + WORD_BYTES);
+        }
+        INT_BE.set(buf, byteLen, (int) (acc >>> WORD_BITS));
+        byteLen += WORD_BYTES;
+        acc <<= WORD_BITS;
+        bitsInAcc -= WORD_BITS;
+    }
+
+    /// Drains whole bytes out of the accumulator, leaving fewer than 8 bits pending — so the
+    /// query methods observe the same "committed bytes only" state the byte-at-a-time writer
+    /// exposed, without forcing the hot path to commit that often.
+    private void commitWholeBytes() {
+        int whole = bitsInAcc >>> 3;
+        if (whole == 0) {
+            return;
+        }
+        ensureCapacity(byteLen + whole);
+        for (int i = 0; i < whole; i++) {
+            buf[byteLen++] = (byte) (acc >>> 56);
+            acc <<= 8;
+        }
+        bitsInAcc -= whole << 3;
     }
 
     private void ensureCapacity(int need) {
-        if (need <= buf.length) {
-            return;
+        if (need > buf.length) {
+            grow(need);
         }
+    }
+
+    private void grow(int need) {
         int n = buf.length;
         while (n < need) {
             n <<= 1;

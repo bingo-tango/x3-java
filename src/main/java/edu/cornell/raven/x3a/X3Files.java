@@ -1,6 +1,8 @@
 package edu.cornell.raven.x3a;
 
+import java.io.BufferedOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -12,14 +14,21 @@ import java.nio.file.Path;
 /// one buffer.
 public final class X3Files {
 
+    /// Output buffer for [#wavToX3a], matching [WavPcm]'s write-side buffering.
+    private static final int WRITE_BUFFER_BYTES = 64 * 1024;
+
     private X3Files() {
     }
 
     /// Converts a 16-bit PCM WAV file to an X3 archive (`.x3a`). Overwrites `x3aPath` if it exists.
+    ///
+    /// Frames stream out as they are packed ([X3BulkEncoder#encodeTo]), so peak heap is the
+    /// input PCM plus a few frame slots rather than a second full-size archive image.
     public static void wavToX3a(Path wavPath, Path x3aPath) throws IOException {
         WavPcm.WavData wav = WavPcm.read(wavPath);
-        byte[] archive = X3BulkEncoder.encode(wav.samples, wav.frames, wav.channels, wav.sampleRate);
-        Files.write(x3aPath, archive);
+        try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(x3aPath), WRITE_BUFFER_BYTES)) {
+            X3BulkEncoder.encodeTo(out, wav.samples, wav.frames, wav.channels, wav.sampleRate);
+        }
     }
 
     /// Converts an X3 archive (`.x3a`) to a 16-bit PCM WAV file. Overwrites `wavPath` if it exists.

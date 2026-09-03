@@ -61,16 +61,26 @@ public final class X3FrameHeader {
     /// over the fields written so far.
     public byte[] encode() {
         byte[] h = new byte[LENGTH];
-        putBe16(h, P_KEY, KEY);
-        h[P_SOURCE_ID] = (byte) sourceId;
-        h[P_CHANNELS] = (byte) channels;
-        putBe16(h, P_SAMPLES, samples);
-        putBe16(h, P_PAYLOAD_SIZE, payloadLen);
-        putBe64(h, P_TIME, time);
-        int headerCrc = Crc16.crc(h, 0, P_HEADER_CRC);
-        putBe16(h, P_HEADER_CRC, headerCrc);
-        putBe16(h, P_PAYLOAD_CRC, payloadCrc);
+        encodeInto(h, 0);
         return h;
+    }
+
+    /// Encodes into `dest[off, off + LENGTH)` — the allocation-free form, so an encoder
+    /// emitting one header per frame writes straight into its output buffer.
+    ///
+    /// @throws IllegalArgumentException if `dest` has no room for [#LENGTH] bytes at `off`
+    public void encodeInto(byte[] dest, int off) {
+        if (off < 0 || off + LENGTH > dest.length) {
+            throw new IllegalArgumentException("no room for a frame header at " + off);
+        }
+        putBe16(dest, off + P_KEY, KEY);
+        dest[off + P_SOURCE_ID] = (byte) sourceId;
+        dest[off + P_CHANNELS] = (byte) channels;
+        putBe16(dest, off + P_SAMPLES, samples);
+        putBe16(dest, off + P_PAYLOAD_SIZE, payloadLen);
+        putBe64(dest, off + P_TIME, time);
+        putBe16(dest, off + P_HEADER_CRC, Crc16.crc(dest, off, P_HEADER_CRC));
+        putBe16(dest, off + P_PAYLOAD_CRC, payloadCrc);
     }
 
     /// Decodes and validates a header at `off`, verifying [#KEY] and the header CRC so

@@ -5,7 +5,14 @@ import java.lang.foreign.ValueLayout;
 
 /// CRC-16 (XMODEM/CCITT, poly `0x1021`) matching x3-rust / x3new.m, so archive and frame
 /// checksums produced here validate against the reference tooling.
+///
+/// [#crc(byte[],int,int)] consumes four bytes per iteration via slicing-by-4 ([#T1]..[#T3]),
+/// which matters on the encode side: every frame payload is checksummed, so a byte-at-a-time
+/// fold sits directly in the encoder's critical path.
 public final class Crc16 {
+
+    /// Bytes consumed per iteration of the sliced [#crc(int,byte[],int,int)] loop.
+    private static final int SLICE = 4;
 
     private static final int[] TABLE = {
             0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50a5, 0x60c6, 0x70e7, 0x8108, 0x9129, 0xa14a, 0xb16b, 0xc18c, 0xd1ad,
@@ -29,7 +36,26 @@ public final class Crc16 {
             0x2e93, 0x3eb2, 0x0ed1, 0x1ef0
     };
 
+    /// [#TABLE] advanced by one zero byte — the contribution of a byte one position further back.
+    private static final int[] T1 = advance(TABLE);
+    /// [#TABLE] advanced by two zero bytes.
+    private static final int[] T2 = advance(T1);
+    /// [#TABLE] advanced by three zero bytes.
+    private static final int[] T3 = advance(T2);
+
     private Crc16() {
+    }
+
+    /// Shifts a whole table one byte position further back in the message, i.e. folds one
+    /// zero byte through every entry. CRC tables are linear over GF(2), so a four-byte step
+    /// is the XOR of four such shifted lookups.
+    private static int[] advance(int[] prev) {
+        int[] next = new int[256];
+        for (int i = 0; i < 256; i++) {
+            int c = prev[i];
+            next[i] = ((c << 8) ^ TABLE[(c >>> 8) & 0xff]) & 0xffff;
+        }
+        return next;
     }
 
     /// Initial CRC value for a fresh stream.
@@ -49,8 +75,29 @@ public final class Crc16 {
 
     /// CRC of a sub-range, from [#INIT] — avoids copying a slice just to checksum it.
     public static int crc(byte[] data, int off, int len) {
-        int c = INIT;
-        for (int i = 0; i < len; i++) {
+        return crc(INIT, data, off, len);
+    }
+
+    /// Continues a running CRC over `data[off, off+len)`, four bytes per step.
+    ///
+    /// Passing back a previous result lets a producer checksum its output in batches as it
+    /// goes — [BitstreamWriter] folds each newly committed run of bytes exactly once — rather
+    /// than either keeping a byte-at-a-time fold in the hot path or re-walking the buffer.
+    ///
+    /// @param seed [#INIT] for a fresh stream, or the result of the preceding call
+    public static int crc(int seed, byte[] data, int off, int len) {
+        int c = seed;
+        int i = 0;
+        int sliceLimit = len - SLICE;
+        while (i <= sliceLimit) {
+            int p = off + i;
+            c = T3[(data[p] & 0xff) ^ (c >>> 8)]
+                    ^ T2[(data[p + 1] & 0xff) ^ (c & 0xff)]
+                    ^ T1[data[p + 2] & 0xff]
+                    ^ TABLE[data[p + 3] & 0xff];
+            i += SLICE;
+        }
+        for (; i < len; i++) {
             c = update(c, data[off + i] & 0xff);
         }
         return c;
