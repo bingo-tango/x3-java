@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class X3DecoderTest {
+class SudStreamingDecoderTest {
 
     @TempDir
     Path tempDir;
@@ -21,7 +21,7 @@ class X3DecoderTest {
         Path sud = tempDir.resolve("tiny.sud");
         Files.write(sud, new byte[256]);
 
-        try (X3Decoder decoder = new X3Decoder(sud)) {
+        try (SudStreamingDecoder decoder = new SudStreamingDecoder(sud)) {
             short[] ints = new short[32];
             float[] floats = new float[32];
 
@@ -36,7 +36,7 @@ class X3DecoderTest {
         Path sud = tempDir.resolve("tiny.sud");
         Files.write(sud, new byte[256]);
 
-        try (X3Decoder decoder = new X3Decoder(sud)) {
+        try (SudStreamingDecoder decoder = new SudStreamingDecoder(sud)) {
             FileMetadata metadata = decoder.metadata();
 
             assertEquals(576_000, metadata.sampleRate());
@@ -51,7 +51,7 @@ class X3DecoderTest {
         if (!Files.exists(fixture)) {
             return;
         }
-        try (X3Decoder decoder = new X3Decoder(fixture)) {
+        try (SudStreamingDecoder decoder = new SudStreamingDecoder(fixture)) {
             assertEquals(48_000, decoder.metadata().sampleRate());
             assertEquals(1, decoder.metadata().channels());
             assertEquals(172_813_552L, decoder.totalSamples());
@@ -83,8 +83,8 @@ class X3DecoderTest {
 
     @Test
     void parseBlockLen_readsCfg() {
-        assertEquals(16, X3Decoder.parseBlockLen("<BLKLEN>16</BLKLEN>", 20));
-        assertEquals(20, X3Decoder.parseBlockLen("", 20));
+        assertEquals(16, SudStreamingDecoder.parseBlockLen("<BLKLEN>16</BLKLEN>", 20));
+        assertEquals(20, SudStreamingDecoder.parseBlockLen("", 20));
     }
 
     @Test
@@ -96,12 +96,12 @@ class X3DecoderTest {
         int n = 48_000; // enough frames to span multiple chunks
         short[] sequential;
         short[] parallel;
-        try (X3Decoder seq = new X3Decoder(fixture, DecodeOptions.defaults().withMaxConcurrency(1))) {
+        try (SudStreamingDecoder seq = new SudStreamingDecoder(fixture, DecodeOptions.defaults().withMaxConcurrency(1))) {
             sequential = new short[n];
             assertEquals(n, seq.decodeSamplesInt(0L, n, sequential));
             assertEquals(1, seq.pipeline().maxConcurrency());
         }
-        try (X3Decoder par = new X3Decoder(fixture, DecodeOptions.defaults().withMaxConcurrency(4))) {
+        try (SudStreamingDecoder par = new SudStreamingDecoder(fixture, DecodeOptions.defaults().withMaxConcurrency(4))) {
             parallel = new short[n];
             assertEquals(n, par.decodeSamplesInt(0L, n, parallel));
             assertTrue(par.pipeline().usesSharedLimiter());

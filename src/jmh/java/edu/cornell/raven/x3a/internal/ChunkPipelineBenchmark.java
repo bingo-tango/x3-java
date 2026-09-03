@@ -1,6 +1,6 @@
 package edu.cornell.raven.x3a.internal;
 
-import edu.cornell.raven.x3a.X3AudioDecoder;
+import edu.cornell.raven.x3a.X3FrameDecoder;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
@@ -46,7 +46,7 @@ public class ChunkPipelineBenchmark {
         MemorySegment mapped = arena.allocate(64 * 1024);
         mapped.fill((byte) 0);
         // Empty index table stub; real tables come from the SUD container layer.
-        pipeline = new ChunkPipeline(mapped, new long[0], 0, new X3AudioDecoder(), 1, concurrency);
+        pipeline = new ChunkPipeline(mapped, new long[0], 0, new X3FrameDecoder(), 1, concurrency);
         intDest = new short[8192];
         floatDest = new float[8192];
         scratch = new short[8192];

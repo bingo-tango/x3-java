@@ -59,13 +59,13 @@ public final class X3Files {
     /// @throws X3FormatException if the file is neither a readable archive nor a `.SUD` container
     /// @throws IOException if the file cannot be read
     public static X3Header readHeader(Path path) throws IOException {
-        if (X3Readers.isArchive(path)) {
+        if (X3Streams.isArchive(path)) {
             try (Arena arena = Arena.ofConfined()) {
                 MemorySegment mapped = map(path, arena);
                 ArchiveIndex index;
                 try {
-                    index = ArchiveIndex.build(mapped, X3AudioEncoder.DEFAULT_BLOCK_LEN,
-                            X3AudioEncoder.DEFAULT_RICE_ORDERS);
+                    index = ArchiveIndex.build(mapped, X3FrameEncoder.DEFAULT_BLOCK_LEN,
+                            X3FrameEncoder.DEFAULT_RICE_ORDERS);
                 } catch (IllegalArgumentException e) {
                     throw new X3FormatException("not a readable X3 archive: " + path, e);
                 }
@@ -102,7 +102,7 @@ public final class X3Files {
     /// Converts a 16-bit PCM WAV file to an X3 archive (`.x3a`). Overwrites `x3aPath` if it exists.
     public static void wavToX3a(Path wavPath, Path x3aPath) throws IOException {
         WavPcm.WavData wav = WavPcm.read(wavPath);
-        X3AudioEncoder encoder = new X3AudioEncoder();
+        X3FrameEncoder encoder = new X3FrameEncoder();
         byte[] archive = encodeArchive(
                 wav.samples,
                 wav.frames,
@@ -120,7 +120,7 @@ public final class X3Files {
 
     /// Builds a complete `.x3a` byte image from interleaved PCM.
     public static byte[] encodeArchive(short[] pcm, int frames, int channels, int sampleRate,
-                                       X3AudioEncoder encoder) {
+                                       X3FrameEncoder encoder) {
         if (frames <= 0) {
             throw new IllegalArgumentException("frames must be > 0");
         }
@@ -167,7 +167,7 @@ public final class X3Files {
     /// [DecodeOptions#defaults()] for frame-decode concurrency.
     ///
     /// Decodes the entire archive into one buffer; for large files, prefer
-    /// [X3ArchiveDecoder] and read bounded windows instead.
+    /// [X3ArchiveStreamingDecoder] and read bounded windows instead.
     ///
     /// @throws X3FormatException if the image is not a well-formed X3 archive
     public static DecodedArchive decodeArchive(byte[] archive) throws X3FormatException {
@@ -183,7 +183,7 @@ public final class X3Files {
     /// by a local + optional shared [Semaphore] (mirrors [ChunkPipeline#decodeWindowInt]).
     ///
     /// Every frame's header and payload CRC is verified, unlike the lazier framing-only
-    /// validation [X3ArchiveDecoder] does at open time.
+    /// validation [X3ArchiveStreamingDecoder] does at open time.
     ///
     /// @throws X3FormatException if the image is not a well-formed X3 archive
     public static DecodedArchive decodeArchive(byte[] archive, DecodeOptions options) throws X3FormatException {
@@ -210,9 +210,9 @@ public final class X3Files {
         pos += xmlHdr.payloadLen;
 
         int sampleRate = parseInt(FS, xml, 48000);
-        int blockLen = parseInt(BLKLEN, xml, X3AudioEncoder.DEFAULT_BLOCK_LEN);
-        int[] rice = parseTriple(CODES, xml, X3AudioEncoder.DEFAULT_RICE_ORDERS);
-        X3AudioDecoder decoder = new X3AudioDecoder(blockLen, rice);
+        int blockLen = parseInt(BLKLEN, xml, X3FrameEncoder.DEFAULT_BLOCK_LEN);
+        int[] rice = parseTriple(CODES, xml, X3FrameEncoder.DEFAULT_RICE_ORDERS);
+        X3FrameDecoder decoder = new X3FrameDecoder(blockLen, rice);
 
         // Single pass: verify header CRC (via X3FrameHeader.decode) and payload CRC exactly
         // once per frame — including metadata frames, matching the original two-pass
@@ -288,7 +288,7 @@ public final class X3Files {
         }
     }
 
-    private static void decodeFramesParallel(byte[] archive, X3AudioDecoder decoder, int frameCount,
+    private static void decodeFramesParallel(byte[] archive, X3FrameDecoder decoder, int frameCount,
             int[] payloadOffset, int[] payloadLen, int[] sampleCount, int[] frameChannels,
             int[] pcmOffset, short[] pcm, DecodeOptions options) {
         int maxConcurrency = Math.max(1, options.maxConcurrency());
@@ -301,8 +301,8 @@ public final class X3Files {
             tasks.add(() -> {
                 acquirePermits(localLimiter, sharedLimiter);
                 try {
-                    // Task-local decoder: X3AudioDecoder keeps block scratch on the instance.
-                    X3AudioDecoder local = decoder.newInstance();
+                    // Task-local decoder: X3FrameDecoder keeps block scratch on the instance.
+                    X3FrameDecoder local = decoder.newInstance();
                     local.decodeChunkInt(archive, payloadOffset[idx], payloadLen[idx], sampleCount[idx],
                             frameChannels[idx], pcm, pcmOffset[idx], false);
                     return null;
@@ -382,7 +382,7 @@ public final class X3Files {
         }
     }
 
-    static String buildXml(int sampleRate, X3AudioEncoder enc) {
+    static String buildXml(int sampleRate, X3FrameEncoder enc) {
         int[] c = enc.riceOrders();
         int[] t = enc.thresholds();
         // Trailing space keeps common layouts even-length after concat.

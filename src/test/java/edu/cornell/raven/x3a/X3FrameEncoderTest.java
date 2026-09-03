@@ -10,15 +10,15 @@ import java.lang.foreign.ValueLayout;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-class X3AudioEncoderTest {
+class X3FrameEncoderTest {
 
     @Test
     void residualToRiceIndex_inverseOfDecoderTable() {
-        assertEquals(0, X3AudioEncoder.residualToRiceIndex(0));
-        assertEquals(1, X3AudioEncoder.residualToRiceIndex(-1));
-        assertEquals(2, X3AudioEncoder.residualToRiceIndex(1));
-        assertEquals(3, X3AudioEncoder.residualToRiceIndex(-2));
-        assertEquals(4, X3AudioEncoder.residualToRiceIndex(2));
+        assertEquals(0, X3FrameEncoder.residualToRiceIndex(0));
+        assertEquals(1, X3FrameEncoder.residualToRiceIndex(-1));
+        assertEquals(2, X3FrameEncoder.residualToRiceIndex(1));
+        assertEquals(3, X3FrameEncoder.residualToRiceIndex(-2));
+        assertEquals(4, X3FrameEncoder.residualToRiceIndex(2));
     }
 
     @Test
@@ -64,7 +64,7 @@ class X3AudioEncoderTest {
 
     private static void roundTrip(short[] pcm, int channels, int blockLen) {
         int frames = pcm.length / channels;
-        X3AudioEncoder enc = new X3AudioEncoder(blockLen, 500, new int[] {0, 1, 3}, new int[] {3, 8, 20});
+        X3FrameEncoder enc = new X3FrameEncoder(blockLen, 500, new int[] {0, 1, 3}, new int[] {3, 8, 20});
         BitstreamWriter bp = enc.encodeFrame(pcm, 0, frames, channels);
         byte[] payload = bp.toByteArray();
 
@@ -74,7 +74,7 @@ class X3AudioEncoderTest {
                 seg.set(ValueLayout.JAVA_BYTE, i, payload[i]);
             }
             short[] out = new short[pcm.length];
-            X3AudioDecoder dec = new X3AudioDecoder(blockLen, new int[] {0, 1, 3});
+            X3FrameDecoder dec = new X3FrameDecoder(blockLen, new int[] {0, 1, 3});
             int n = dec.decodeChunkInt(seg, frames, channels, out, 0, false);
             assertEquals(frames, n);
             assertArrayEquals(pcm, out);

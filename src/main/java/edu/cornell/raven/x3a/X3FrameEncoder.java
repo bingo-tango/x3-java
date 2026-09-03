@@ -3,12 +3,12 @@ package edu.cornell.raven.x3a;
 import edu.cornell.raven.x3a.internal.BitstreamWriter;
 
 /// X3V2 frame encoder (diff predictor + RICE0/1/3 + BFP), producing payloads
-/// [X3AudioDecoder] can unpack bit-for-bit.
+/// [X3FrameDecoder] can unpack bit-for-bit.
 ///
 /// Defaults match the public x3 archive codec (`BLKLEN=20`, rice orders 0/1/3,
 /// thresholds 3/8/20). Hot residual loops use pre-sized primitive scratch only, with
 /// no per-sample allocation.
-public final class X3AudioEncoder {
+public final class X3FrameEncoder {
 
     /// Default block length matching the public x3 archive codec.
     public static final int DEFAULT_BLOCK_LEN = 20;
@@ -31,13 +31,13 @@ public final class X3AudioEncoder {
     private final int[] diffScratch = new int[MAX_BLOCK_LEN];
 
     /// Public x3 archive codec defaults.
-    public X3AudioEncoder() {
+    public X3FrameEncoder() {
         this(DEFAULT_BLOCK_LEN, DEFAULT_BLOCKS_PER_FRAME, DEFAULT_RICE_ORDERS, DEFAULT_THRESHOLDS);
     }
 
     /// @param riceOrders  exactly 3 orders, written into the archive's `<CODES>` config
     /// @param thresholds  exactly 3 magnitude thresholds selecting between those orders
-    public X3AudioEncoder(int blockLen, int blocksPerFrame, int[] riceOrders, int[] thresholds) {
+    public X3FrameEncoder(int blockLen, int blocksPerFrame, int[] riceOrders, int[] thresholds) {
         if (blockLen <= 0 || blockLen > MAX_BLOCK_LEN) {
             throw new IllegalArgumentException("blockLen must be in 1.." + MAX_BLOCK_LEN);
         }
@@ -184,7 +184,7 @@ public final class X3AudioEncoder {
         }
     }
 
-    /// Packs residuals with the given rice order, matching [X3AudioDecoder]'s unpack.
+    /// Packs residuals with the given rice order, matching [X3FrameDecoder]'s unpack.
     static void packRice(BitstreamWriter bp, int[] diffs, int n, int riceOrder) {
         for (int i = 0; i < n; i++) {
             int index = residualToRiceIndex(diffs[i]);

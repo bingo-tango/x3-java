@@ -5,9 +5,13 @@ import edu.cornell.raven.x3a.internal.ChunkPipeline;
 
 import java.lang.foreign.MemorySegment;
 
-/// Unpacks X3V2 predictive audio (RICE0/1/3 + BFP block coding, diff filter) into a
+/// Unpacks one X3V2 coded frame (RICE0/1/3 + BFP block coding, diff filter) into a
 /// flattened, interleaved PCM buffer — matching the Johnson et al. codec and the
 /// PAMGuard / x3-rust reference decoders bit-for-bit.
+///
+/// This is the codec layer, below the file readers: it decodes a *single* frame payload and
+/// knows nothing about archives or containers. To read a file, use [X3Streams#open]
+/// (streaming) or [X3BulkDecoder] (whole-file); both drive this class.
 ///
 /// Output is a single interleaved `short[]` (no `short[][]`) so multi-channel decode
 /// stays allocation-free. SoundTrap `.SUD` payloads need the pair-wise endian swap
@@ -15,7 +19,7 @@ import java.lang.foreign.MemorySegment;
 ///
 /// Rice and BFP paths fuse residual unpack with diff-integrate in one pass, with
 /// specialized loops for orders 0/1/3 (the common case) mirroring x3-rust.
-public final class X3AudioDecoder {
+public final class X3FrameDecoder {
 
     private static final float SCALE_TO_UNIT = 1.0f / 32768.0f;
 
@@ -37,15 +41,15 @@ public final class X3AudioDecoder {
 
     /// SoundTrap/SUD defaults (16-sample blocks, rice orders `{0, 1, 3}`) — the fallback
     /// [ChunkPipeline] constructs when no decoder is supplied. Plain `.x3a` archives use
-    /// [X3AudioEncoder#DEFAULT_BLOCK_LEN] (20) instead; [X3Files] always parses the
+    /// [X3FrameEncoder#DEFAULT_BLOCK_LEN] (20) instead; [X3Files] always parses the
     /// archive's own `<BLKLEN>` and constructs a decoder with the matching value, so this
     /// default is never used for archive decode.
-    public X3AudioDecoder() {
+    public X3FrameDecoder() {
         this(16, new int[] {0, 1, 3});
     }
 
     /// @param riceOrders exactly 3 orders, matching the archive's `<CODES>` config
-    public X3AudioDecoder(int blockLen, int[] riceOrders) {
+    public X3FrameDecoder(int blockLen, int[] riceOrders) {
         if (blockLen <= 0 || blockLen > MAX_BLOCK_LEN) {
             throw new IllegalArgumentException("blockLen must be in 1.." + MAX_BLOCK_LEN);
         }
@@ -63,8 +67,8 @@ public final class X3AudioDecoder {
 
     /// Stateless copy for parallel chunk tasks — each task needs its own [#blockScratch]
     /// so concurrent decodes don't clobber each other's residual buffer.
-    public X3AudioDecoder newInstance() {
-        return new X3AudioDecoder(blockLen, riceOrders);
+    public X3FrameDecoder newInstance() {
+        return new X3FrameDecoder(blockLen, riceOrders);
     }
 
     /// Decodes one acoustic chunk / frame payload into a caller-owned interleaved buffer.

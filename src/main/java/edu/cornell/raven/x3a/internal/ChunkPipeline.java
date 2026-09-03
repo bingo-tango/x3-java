@@ -1,7 +1,7 @@
 package edu.cornell.raven.x3a.internal;
 
 import edu.cornell.raven.x3a.DecodeOptions;
-import edu.cornell.raven.x3a.X3AudioDecoder;
+import edu.cornell.raven.x3a.X3FrameDecoder;
 
 import java.lang.foreign.MemorySegment;
 import java.util.ArrayList;
@@ -51,7 +51,7 @@ public final class ChunkPipeline {
     private final long[] indexTable;
     private final int chunkCount;
     private final long totalSamples;
-    private final X3AudioDecoder audioDecoder;
+    private final X3FrameDecoder frameDecoder;
     private final int channels;
     private final int maxConcurrency;
     private final Semaphore localLimiter;
@@ -67,11 +67,11 @@ public final class ChunkPipeline {
     public ChunkPipeline(MemorySegment mappedFile,
                          long[] indexTable,
                          int chunkCount,
-                         X3AudioDecoder audioDecoder,
+                         X3FrameDecoder frameDecoder,
                          int channels,
                          int maxConcurrency) {
         this(mappedFile, indexTable, chunkCount, inferTotalSamples(indexTable, chunkCount),
-                audioDecoder, channels, DecodeOptions.defaults()
+                frameDecoder, channels, DecodeOptions.defaults()
                         .withMaxConcurrency(maxConcurrency));
     }
 
@@ -83,7 +83,7 @@ public final class ChunkPipeline {
                          long[] indexTable,
                          int chunkCount,
                          long totalSamples,
-                         X3AudioDecoder audioDecoder,
+                         X3FrameDecoder frameDecoder,
                          int channels,
                          DecodeOptions options) {
         if (options == null) {
@@ -93,7 +93,7 @@ public final class ChunkPipeline {
         this.indexTable = indexTable != null ? indexTable : new long[0];
         this.chunkCount = Math.max(0, chunkCount);
         this.totalSamples = Math.max(0L, totalSamples);
-        this.audioDecoder = audioDecoder != null ? audioDecoder : new X3AudioDecoder();
+        this.frameDecoder = frameDecoder != null ? frameDecoder : new X3FrameDecoder();
         this.channels = Math.max(1, channels);
         this.maxConcurrency = Math.max(1, options.maxConcurrency());
         this.localLimiter = new Semaphore(this.maxConcurrency, false);
@@ -217,8 +217,8 @@ public final class ChunkPipeline {
             tasks.add(() -> {
                 acquirePermits();
                 try {
-                    // Task-local decoder: X3AudioDecoder keeps block scratch on the instance.
-                    X3AudioDecoder local = audioDecoder.newInstance();
+                    // Task-local decoder: X3FrameDecoder keeps block scratch on the instance.
+                    X3FrameDecoder local = frameDecoder.newInstance();
                     long fileOff = fileByteOffset(chunkIndex) + payloadHeaderBytes;
                     int payloadLen = (int) chunkLength(chunkIndex);
                     MemorySegment payload = mappedFile.asSlice(fileOff, payloadLen);
@@ -257,12 +257,12 @@ public final class ChunkPipeline {
     }
 
     /// Decodes chunk `chunk` in full into `dest` at `destOffset`, using this pipeline's shared
-    /// decoder — sequential path only; parallel tasks use their own [X3AudioDecoder#newInstance].
+    /// decoder — sequential path only; parallel tasks use their own [X3FrameDecoder#newInstance].
     private void decodeChunk(int chunk, int chunkSamples, short[] dest, int destOffset) {
         long fileOff = fileByteOffset(chunk) + payloadHeaderBytes;
         int payloadLen = (int) chunkLength(chunk);
         MemorySegment payload = mappedFile.asSlice(fileOff, payloadLen);
-        audioDecoder.decodeChunkInt(payload, chunkSamples, channels, dest, destOffset, sudPayload);
+        frameDecoder.decodeChunkInt(payload, chunkSamples, channels, dest, destOffset, sudPayload);
     }
 
     private void acquirePermits() throws InterruptedException {

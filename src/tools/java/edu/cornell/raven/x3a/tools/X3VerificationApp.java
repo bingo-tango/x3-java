@@ -3,7 +3,7 @@ package edu.cornell.raven.x3a.tools;
 import edu.cornell.raven.x3a.X3Files;
 import edu.cornell.raven.x3a.DecodeOptions;
 import edu.cornell.raven.x3a.sud.FileMetadata;
-import edu.cornell.raven.x3a.sud.X3Decoder;
+import edu.cornell.raven.x3a.sud.SudStreamingDecoder;
 
 import javafx.application.Application;
 import javafx.application.Platform;
@@ -286,7 +286,7 @@ public final class X3VerificationApp extends Application {
     }
 
     private void convertSud(Path input, Path wavOut) throws Exception {
-        try (X3Decoder decoder = new X3Decoder(input)) {
+        try (SudStreamingDecoder decoder = new SudStreamingDecoder(input)) {
             FileMetadata metadata = decoder.metadata();
             int channels = Math.max(1, metadata.channels());
             long total = decoder.totalSamples();

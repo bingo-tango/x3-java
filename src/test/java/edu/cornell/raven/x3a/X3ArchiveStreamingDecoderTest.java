@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /// Verifies windowed random-access archive decode against [X3Files#decodeArchive(byte[])],
 /// which is already cross-validated bit-for-bit against the reference implementations.
-class X3ArchiveDecoderTest {
+class X3ArchiveStreamingDecoderTest {
 
     @TempDir
     Path tmp;
@@ -42,7 +42,7 @@ class X3ArchiveDecoderTest {
     @Test
     void reportsArchiveMetadata() throws Exception {
         Path x3a = writeArchive(1);
-        try (X3ArchiveDecoder decoder = new X3ArchiveDecoder(x3a)) {
+        try (X3ArchiveStreamingDecoder decoder = new X3ArchiveStreamingDecoder(x3a)) {
             assertEquals(SAMPLE_RATE, decoder.sampleRate());
             assertEquals(1, decoder.channels());
             assertEquals(16, decoder.bitDepth());
@@ -61,7 +61,7 @@ class X3ArchiveDecoderTest {
         int[] windows = {1, 999, 4096, 50_000};
         long[] offsets = {0, 1, 12_345, FRAMES - 4096};
 
-        try (X3ArchiveDecoder decoder = new X3ArchiveDecoder(x3a)) {
+        try (X3ArchiveStreamingDecoder decoder = new X3ArchiveStreamingDecoder(x3a)) {
             for (int window : windows) {
                 for (long offset : offsets) {
                     short[] got = new short[window];
@@ -83,7 +83,7 @@ class X3ArchiveDecoderTest {
         Path x3a = writeArchive(2);
         X3Files.DecodedArchive expected = X3Files.decodeArchive(Files.readAllBytes(x3a));
 
-        try (X3ArchiveDecoder decoder = new X3ArchiveDecoder(x3a)) {
+        try (X3ArchiveStreamingDecoder decoder = new X3ArchiveStreamingDecoder(x3a)) {
             assertEquals(2, decoder.channels());
             int window = 7777;
             long offset = 33_333;
@@ -104,10 +104,10 @@ class X3ArchiveDecoderTest {
         short[] sequential = new short[window];
         short[] parallel = new short[window];
 
-        try (X3ArchiveDecoder decoder = new X3ArchiveDecoder(x3a, DecodeOptions.defaults().withMaxConcurrency(1))) {
+        try (X3ArchiveStreamingDecoder decoder = new X3ArchiveStreamingDecoder(x3a, DecodeOptions.defaults().withMaxConcurrency(1))) {
             assertEquals(window, decoder.decodeSamplesInt(1000, window, sequential));
         }
-        try (X3ArchiveDecoder decoder = new X3ArchiveDecoder(x3a, DecodeOptions.defaults().withMaxConcurrency(4))) {
+        try (X3ArchiveStreamingDecoder decoder = new X3ArchiveStreamingDecoder(x3a, DecodeOptions.defaults().withMaxConcurrency(4))) {
             assertEquals(window, decoder.decodeSamplesInt(1000, window, parallel));
         }
         assertArrayEquals(sequential, parallel);
@@ -120,7 +120,7 @@ class X3ArchiveDecoderTest {
         short[] ints = new short[window];
         float[] floats = new float[window];
 
-        try (X3ArchiveDecoder decoder = new X3ArchiveDecoder(x3a)) {
+        try (X3ArchiveStreamingDecoder decoder = new X3ArchiveStreamingDecoder(x3a)) {
             assertEquals(window, decoder.decodeSamplesInt(2048, window, ints));
             assertEquals(window, decoder.decodeSamplesFloat(2048, window, floats));
         }
@@ -132,7 +132,7 @@ class X3ArchiveDecoderTest {
     @Test
     void readsPastEndReturnZeroFrames() throws Exception {
         Path x3a = writeArchive(1);
-        try (X3ArchiveDecoder decoder = new X3ArchiveDecoder(x3a)) {
+        try (X3ArchiveStreamingDecoder decoder = new X3ArchiveStreamingDecoder(x3a)) {
             assertEquals(0, decoder.decodeSamplesInt(FRAMES, 1024, new short[1024]));
             assertEquals(0, decoder.decodeSamplesInt(FRAMES + 5000, 1024, new short[1024]));
         }
@@ -141,7 +141,7 @@ class X3ArchiveDecoderTest {
     @Test
     void closeIsIdempotent() throws Exception {
         Path x3a = writeArchive(1);
-        X3ArchiveDecoder decoder = new X3ArchiveDecoder(x3a);
+        X3ArchiveStreamingDecoder decoder = new X3ArchiveStreamingDecoder(x3a);
         decoder.close();
         decoder.close();
     }
@@ -151,16 +151,16 @@ class X3ArchiveDecoderTest {
         Path junk = tmp.resolve("junk.x3a");
         Files.write(junk, "this is not an X3 archive, not even close".getBytes());
 
-        assertFalse(X3Readers.isArchive(junk));
-        assertThrows(X3FormatException.class, () -> new X3ArchiveDecoder(junk));
+        assertFalse(X3Streams.isArchive(junk));
+        assertThrows(X3FormatException.class, () -> new X3ArchiveStreamingDecoder(junk));
     }
 
     @Test
     void readersOpenSelectsArchiveDecoderByMagic() throws Exception {
         Path x3a = writeArchive(1);
-        assertTrue(X3Readers.isArchive(x3a));
-        try (X3SampleReader reader = X3Readers.open(x3a)) {
-            assertInstanceOf(X3ArchiveDecoder.class, reader);
+        assertTrue(X3Streams.isArchive(x3a));
+        try (X3StreamingDecoder reader = X3Streams.open(x3a)) {
+            assertInstanceOf(X3ArchiveStreamingDecoder.class, reader);
             assertEquals(FRAMES, reader.totalSamples());
             assertEquals(SAMPLE_RATE, reader.sampleRate());
         }
@@ -170,7 +170,7 @@ class X3ArchiveDecoderTest {
     void readHeaderAgreesWithArchiveDecoder() throws Exception {
         Path x3a = writeArchive(2);
         X3Files.X3Header header = X3Files.readHeader(x3a);
-        try (X3ArchiveDecoder decoder = new X3ArchiveDecoder(x3a)) {
+        try (X3ArchiveStreamingDecoder decoder = new X3ArchiveStreamingDecoder(x3a)) {
             assertEquals(decoder.sampleRate(), header.sampleRate());
             assertEquals(decoder.channels(), header.channels());
             assertEquals(decoder.bitDepth(), header.bitDepth());

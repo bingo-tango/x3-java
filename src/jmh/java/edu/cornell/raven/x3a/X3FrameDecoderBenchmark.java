@@ -18,7 +18,7 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.util.concurrent.TimeUnit;
 
-/// Measures [X3AudioDecoder]'s per-chunk decode cost in isolation from file I/O or
+/// Measures [X3FrameDecoder]'s per-chunk decode cost in isolation from file I/O or
 /// container framing, to catch regressions in the codec itself.
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
@@ -26,11 +26,11 @@ import java.util.concurrent.TimeUnit;
 @Measurement(iterations = 1, time = 1)
 @Fork(1)
 @State(Scope.Thread)
-public class X3AudioDecoderBenchmark {
+public class X3FrameDecoderBenchmark {
 
     private Arena arena;
     private MemorySegment payload;
-    private X3AudioDecoder decoder;
+    private X3FrameDecoder decoder;
     private short[] intDest;
     private float[] floatDest;
     private short[] scratch;
@@ -40,7 +40,7 @@ public class X3AudioDecoderBenchmark {
         arena = Arena.ofConfined();
         payload = arena.allocate(8192);
         payload.fill((byte) 0x3C);
-        decoder = new X3AudioDecoder();
+        decoder = new X3FrameDecoder();
         intDest = new short[4096];
         floatDest = new float[4096];
         scratch = new short[4096];

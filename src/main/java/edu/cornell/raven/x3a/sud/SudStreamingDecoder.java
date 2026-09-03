@@ -1,9 +1,9 @@
 package edu.cornell.raven.x3a.sud;
 
 import edu.cornell.raven.x3a.DecodeOptions;
-import edu.cornell.raven.x3a.X3AudioDecoder;
+import edu.cornell.raven.x3a.X3FrameDecoder;
 import edu.cornell.raven.x3a.X3FormatException;
-import edu.cornell.raven.x3a.X3SampleReader;
+import edu.cornell.raven.x3a.X3StreamingDecoder;
 import edu.cornell.raven.x3a.internal.ChunkIndex;
 import edu.cornell.raven.x3a.internal.ChunkPipeline;
 import edu.cornell.raven.x3a.internal.RecordHeader;
@@ -14,15 +14,15 @@ import java.nio.file.Path;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/// Facade tying together `.SUD` file mapping, chunk indexing, and X3 decode into a
-/// single random-access handle for one file.
+/// Random-access streaming decoder for a SoundTrap `.SUD` container, tying together file
+/// mapping, chunk indexing, and X3 decode into a single handle for one file.
 ///
-/// The container-format sibling of [edu.cornell.raven.x3a.X3ArchiveDecoder]; both implement
-/// [X3SampleReader], so hosts that only want PCM can accept either.
+/// The container-format sibling of [edu.cornell.raven.x3a.X3ArchiveStreamingDecoder]; both
+/// implement [X3StreamingDecoder], so hosts that only want PCM can accept either.
 ///
 /// Construction eagerly maps the file and builds the chunk index so [#decodeSamplesInt]
 /// / [#decodeSamplesFloat] can seek and decode without further I/O setup cost.
-public class X3Decoder implements X3SampleReader {
+public class SudStreamingDecoder implements X3StreamingDecoder {
 
     private static final float SCALE_TO_UNIT = 1.0f / 32768.0f;
     private static final Pattern BLKLEN = Pattern.compile("<BLKLEN>\\s*(\\d+)\\s*</BLKLEN>");
@@ -34,7 +34,7 @@ public class X3Decoder implements X3SampleReader {
 
     private final ChunkIndex chunkIndex;
 
-    private final X3AudioDecoder audioDecoder;
+    private final X3FrameDecoder frameDecoder;
     private final ChunkPipeline pipeline;
     private final DecodeOptions options;
     private final int channels;
@@ -47,7 +47,7 @@ public class X3Decoder implements X3SampleReader {
     /// Opens `sudFilePath` with [DecodeOptions#sudDefaults] concurrency.
     ///
     /// @throws IOException if the file cannot be opened or mapped
-    public X3Decoder(Path sudFilePath) throws IOException {
+    public SudStreamingDecoder(Path sudFilePath) throws IOException {
         this(sudFilePath, DecodeOptions.sudDefaults((int) RecordHeader.BYTES));
     }
 
@@ -56,7 +56,7 @@ public class X3Decoder implements X3SampleReader {
     /// regardless of `options`; only concurrency tuning is caller-controlled.
     ///
     /// @throws IOException if the file cannot be opened or mapped
-    public X3Decoder(Path sudFilePath, DecodeOptions options) throws IOException {
+    public SudStreamingDecoder(Path sudFilePath, DecodeOptions options) throws IOException {
         if (options == null) {
             throw new IllegalArgumentException("options must not be null");
         }
@@ -72,13 +72,13 @@ public class X3Decoder implements X3SampleReader {
         this.chunkIndex.build(mappedFile, metadata.sampleRate());
         this.channels = Math.max(1, metadata.channels());
         int blockLen = parseBlockLen(metadata.xmlConfig(), 16);
-        this.audioDecoder = new X3AudioDecoder(blockLen, new int[] {0, 1, 3});
+        this.frameDecoder = new X3FrameDecoder(blockLen, new int[] {0, 1, 3});
         this.pipeline = new ChunkPipeline(
                 mappedFile,
                 chunkIndex.table(),
                 chunkIndex.chunkCount(),
                 chunkIndex.totalSamples(),
-                audioDecoder,
+                frameDecoder,
                 channels,
                 sudOpts);
     }

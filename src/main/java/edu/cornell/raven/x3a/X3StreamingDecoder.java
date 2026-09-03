@@ -5,14 +5,17 @@ import java.io.IOException;
 /// Random-access read handle over one X3-coded audio file, independent of the container
 /// it arrived in.
 ///
-/// Implemented by [X3ArchiveDecoder] (bare `.x3a` archives) and
-/// [edu.cornell.raven.x3a.sud.X3Decoder] (SoundTrap `.SUD` containers), so hosts that only
-/// need PCM can treat both identically — see [X3Readers#open].
+/// Implemented by [X3ArchiveStreamingDecoder] (bare `.x3a` archives) and
+/// [edu.cornell.raven.x3a.sud.SudStreamingDecoder] (SoundTrap `.SUD` containers), so hosts
+/// that only need PCM can treat both identically — see [X3Streams#open].
+///
+/// This is the *streaming* half of the API: bounded windows, no whole-file buffer. The bulk
+/// half is [X3BulkDecoder], which decodes an entire archive into one array.
 ///
 /// Both decode methods write into a caller-owned buffer and return the frame count actually
 /// produced, so a steady-state read loop allocates nothing. A request past the end of the
 /// file is clamped rather than failing, and returns fewer frames than asked for.
-public interface X3SampleReader extends AutoCloseable {
+public interface X3StreamingDecoder extends AutoCloseable {
 
     /// Sample rate in Hz.
     int sampleRate();

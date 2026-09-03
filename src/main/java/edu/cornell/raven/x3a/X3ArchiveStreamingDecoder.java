@@ -10,9 +10,9 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
-/// Random-access decoder for a bare `.x3a` archive — the archive counterpart to
-/// [edu.cornell.raven.x3a.sud.X3Decoder], and the streaming alternative to
-/// [X3Files#decodeArchive(byte[])].
+/// Random-access streaming decoder for a bare `.x3a` archive — the archive counterpart to
+/// [edu.cornell.raven.x3a.sud.SudStreamingDecoder], and the streaming alternative to
+/// [X3BulkDecoder].
 ///
 /// Construction maps the file off-heap and indexes its frame headers, so a host can seek to
 /// an arbitrary sample and decode a bounded window without ever holding the whole archive —
@@ -24,7 +24,7 @@ import java.nio.file.StandardOpenOption;
 ///
 /// Instances are safe to use from one thread at a time; [#decodeSamplesFloat] mutates shared
 /// scratch, so concurrent readers need one decoder each.
-public final class X3ArchiveDecoder implements X3SampleReader {
+public final class X3ArchiveStreamingDecoder implements X3StreamingDecoder {
 
     private static final float SCALE_TO_UNIT = 1.0f / 32768.0f;
 
@@ -46,7 +46,7 @@ public final class X3ArchiveDecoder implements X3SampleReader {
     ///
     /// @throws X3FormatException if the file is not a well-formed X3 archive
     /// @throws IOException if the file cannot be opened or mapped
-    public X3ArchiveDecoder(Path archivePath) throws IOException {
+    public X3ArchiveStreamingDecoder(Path archivePath) throws IOException {
         this(archivePath, DecodeOptions.defaults());
     }
 
@@ -57,7 +57,7 @@ public final class X3ArchiveDecoder implements X3SampleReader {
     ///
     /// @throws X3FormatException if the file is not a well-formed X3 archive
     /// @throws IOException if the file cannot be opened or mapped
-    public X3ArchiveDecoder(Path archivePath, DecodeOptions options) throws IOException {
+    public X3ArchiveStreamingDecoder(Path archivePath, DecodeOptions options) throws IOException {
         if (options == null) {
             throw new IllegalArgumentException("options must not be null");
         }
@@ -69,8 +69,8 @@ public final class X3ArchiveDecoder implements X3SampleReader {
                 this.mappedFile = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size(), openArena);
             }
             try {
-                this.index = ArchiveIndex.build(mappedFile, X3AudioEncoder.DEFAULT_BLOCK_LEN,
-                        X3AudioEncoder.DEFAULT_RICE_ORDERS);
+                this.index = ArchiveIndex.build(mappedFile, X3FrameEncoder.DEFAULT_BLOCK_LEN,
+                        X3FrameEncoder.DEFAULT_RICE_ORDERS);
             } catch (IllegalArgumentException e) {
                 throw new X3FormatException("not a readable X3 archive: " + archivePath, e);
             }
@@ -85,7 +85,7 @@ public final class X3ArchiveDecoder implements X3SampleReader {
                 index.table(),
                 index.frameCount(),
                 index.totalSamples(),
-                new X3AudioDecoder(index.blockLen(), index.riceOrders()),
+                new X3FrameDecoder(index.blockLen(), index.riceOrders()),
                 channels,
                 archiveOpts);
     }

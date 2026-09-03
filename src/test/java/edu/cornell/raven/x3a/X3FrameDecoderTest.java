@@ -9,20 +9,20 @@ import java.lang.foreign.ValueLayout;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-class X3AudioDecoderTest {
+class X3FrameDecoderTest {
 
     @Test
     void integrate_appliesDiffPredictor() {
         short[] residuals = {1, -2, 3};
-        X3AudioDecoder.integrate(residuals, 3, (short) 10);
+        X3FrameDecoder.integrate(residuals, 3, (short) 10);
         assertArrayEquals(new short[] {11, 9, 12}, residuals);
     }
 
     @Test
     void fixSign_mapsUnsignedField() {
-        assertEquals((short) 1, X3AudioDecoder.fixSign(1, 4));
-        assertEquals((short) -1, X3AudioDecoder.fixSign(15, 4));
-        assertEquals((short) -8, X3AudioDecoder.fixSign(8, 4));
+        assertEquals((short) 1, X3FrameDecoder.fixSign(1, 4));
+        assertEquals((short) -1, X3FrameDecoder.fixSign(15, 4));
+        assertEquals((short) -8, X3FrameDecoder.fixSign(8, 4));
     }
 
     /**
@@ -55,7 +55,7 @@ class X3AudioDecoderTest {
                 payload.set(ValueLayout.JAVA_BYTE, i, x3[i]);
             }
             short[] dest = new short[20];
-            X3AudioDecoder decoder = new X3AudioDecoder(20, new int[] {0, 1, 3});
+            X3FrameDecoder decoder = new X3FrameDecoder(20, new int[] {0, 1, 3});
             int frames = decoder.decodeChunkInt(payload, 20, 1, dest, 0, false);
             assertEquals(20, frames);
             assertArrayEquals(expected, dest);

@@ -2,7 +2,7 @@
 ///
 /// Framing ([X3FrameHeader], [Crc16]) and bitstream I/O ([BitstreamReader],
 /// [BitstreamWriter]) are kept separate from the codec itself
-/// ([X3AudioEncoder], [X3AudioDecoder]) so the bit-level and block-level logic can
+/// ([X3FrameEncoder], [X3FrameDecoder]) so the bit-level and block-level logic can
 /// each be tested and benchmarked independently. [ChunkPipeline] and
 /// [DecodeScheduler] add parallel, concurrency-bounded decoding for random-access
 /// hosts (see the `...sud` package); they take a flattened index table rather than

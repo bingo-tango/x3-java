@@ -78,16 +78,16 @@ other modules.
 
 ### Decoding, container-agnostic
 
-`X3Readers.open` sniffs the file's magic bytes and returns an `X3SampleReader`
-— `X3ArchiveDecoder` for a bare `.x3a` archive, `sud.X3Decoder` for a `.SUD`
+`X3Streams.open` sniffs the file's magic bytes and returns an `X3StreamingDecoder`
+— `X3ArchiveStreamingDecoder` for a bare `.x3a` archive, `sud.SudStreamingDecoder` for a `.SUD`
 container. Prefer this over naming a concrete decoder: SoundTrap file naming is
 inconsistent, so the extension is not a reliable signal.
 
 ```java
-import edu.cornell.raven.x3a.X3Readers;
-import edu.cornell.raven.x3a.X3SampleReader;
+import edu.cornell.raven.x3a.X3Streams;
+import edu.cornell.raven.x3a.X3StreamingDecoder;
 
-try (X3SampleReader reader = X3Readers.open(Path.of("recording.sud"))) {
+try (X3StreamingDecoder reader = X3Streams.open(Path.of("recording.sud"))) {
     int channels = reader.channels();           // also sampleRate(), bitDepth(), totalSamples()
 
     short[] window = new short[65536 * channels]; // allocate once, reuse per window
@@ -110,9 +110,9 @@ Malformed framing or corrupt coded data surfaces as `X3FormatException`, an
 `IOException` subclass, so callers can distinguish a bad file from an I/O
 failure without catching runtime exceptions.
 
-Construct `sud.X3Decoder` or `X3ArchiveDecoder` directly when you already know
-the container and want its type-specific extras — `X3Decoder.metadata()`
-(device tags, `xmlConfig()`) or `X3ArchiveDecoder.xmlConfig()`.
+Construct `sud.SudStreamingDecoder` or `X3ArchiveStreamingDecoder` directly when you already know
+the container and want its type-specific extras — `SudStreamingDecoder.metadata()`
+(device tags, `xmlConfig()`) or `X3ArchiveStreamingDecoder.xmlConfig()`.
 
 ### Converting `.wav` ↔ `.x3a`
 
@@ -123,7 +123,7 @@ X3Files.wavToX3a(Path.of("in.wav"), Path.of("out.x3a"));
 X3Files.x3aToWav(Path.of("out.x3a"), Path.of("roundtrip.wav"));
 
 // Or decode an archive already in memory (whole file into one buffer — for large
-// archives prefer X3ArchiveDecoder and read bounded windows instead):
+// archives prefer X3ArchiveStreamingDecoder and read bounded windows instead):
 X3Files.DecodedArchive dec = X3Files.decodeArchive(archiveBytes);
 // dec.sampleRate(), dec.channels(), dec.pcm() (interleaved short[]), dec.xml() (embedded config)
 
@@ -133,7 +133,7 @@ X3Files.X3Header header = X3Files.readHeader(Path.of("recording.sud"));
 
 ### Tuning decode concurrency
 
-`X3ArchiveDecoder`, `sud.X3Decoder`, `X3Readers.open`, and
+`X3ArchiveStreamingDecoder`, `sud.SudStreamingDecoder`, `X3Streams.open`, and
 `X3Files.decodeArchive` all accept a `DecodeOptions`:
 
 ```java
@@ -157,8 +157,8 @@ Hard performance rules for anyone touching decode/parse/math paths are in
 
 | Package | Role |
 | --- | --- |
-| `edu.cornell.raven.x3a` | Public API: `X3SampleReader`, `X3Readers`, `X3ArchiveDecoder`, `X3Files`, `X3AudioDecoder`/`Encoder`, `DecodeOptions`, `X3FormatException` |
-| `edu.cornell.raven.x3a.sud` | `.SUD` container: `SudFileMapper`, `FileMetadata`, `TelemetryCallback`, facade `X3Decoder` |
+| `edu.cornell.raven.x3a` | Public API: `X3StreamingDecoder`, `X3Streams`, `X3ArchiveStreamingDecoder`, `X3Files`, `X3FrameDecoder`/`Encoder`, `DecodeOptions`, `X3FormatException` |
+| `edu.cornell.raven.x3a.sud` | `.SUD` container: `SudFileMapper`, `FileMetadata`, `TelemetryCallback`, facade `SudStreamingDecoder` |
 | `edu.cornell.raven.x3a.internal` | Not exported: `BitstreamReader`/`Writer`, `ChunkPipeline`, `ChunkIndex`, `ArchiveIndex`, framing/CRC helpers |
 
 Dependency direction is one-way (`.sud` → core `x3a`), so the codec can be

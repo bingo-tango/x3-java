@@ -10,23 +10,25 @@ import java.nio.file.StandardOpenOption;
 import java.nio.ByteBuffer;
 
 /// Opens X3 audio by content rather than by file extension, returning the right
-/// [X3SampleReader] for what the file actually is.
+/// [X3StreamingDecoder] for what the file actually is.
 ///
 /// SoundTrap tooling is inconsistent about naming — bare X3 archives and `.SUD` containers
 /// both turn up under `.x3a`, `.sud`, and other suffixes — so hosts should sniff instead of
 /// trusting the name. This is the entry point most consumers want; construct
-/// [X3ArchiveDecoder] or [edu.cornell.raven.x3a.sud.X3Decoder] directly only when the
-/// container is already known.
-public final class X3Readers {
+/// [X3ArchiveStreamingDecoder] or [edu.cornell.raven.x3a.sud.SudStreamingDecoder] directly
+/// only when the container is already known.
+///
+/// For a whole-file decode into one buffer, use [X3BulkDecoder] instead.
+public final class X3Streams {
 
-    private X3Readers() {
+    private X3Streams() {
     }
 
     /// Opens `path` with [DecodeOptions#defaults()] concurrency.
     ///
     /// @throws X3FormatException if the file is neither a readable X3 archive nor a `.SUD` container
     /// @throws IOException if the file cannot be opened or mapped
-    public static X3SampleReader open(Path path) throws IOException {
+    public static X3StreamingDecoder open(Path path) throws IOException {
         return open(path, DecodeOptions.defaults());
     }
 
@@ -36,10 +38,10 @@ public final class X3Readers {
     ///
     /// @throws X3FormatException if the file is neither a readable X3 archive nor a `.SUD` container
     /// @throws IOException if the file cannot be opened or mapped
-    public static X3SampleReader open(Path path, DecodeOptions options) throws IOException {
+    public static X3StreamingDecoder open(Path path, DecodeOptions options) throws IOException {
         return isArchive(path)
-                ? new X3ArchiveDecoder(path, options)
-                : new edu.cornell.raven.x3a.sud.X3Decoder(path, options);
+                ? new X3ArchiveStreamingDecoder(path, options)
+                : new edu.cornell.raven.x3a.sud.SudStreamingDecoder(path, options);
     }
 
     /// Whether `path` opens with the `X3ARCHIV` magic of a bare X3 archive. A file too short to

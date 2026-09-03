@@ -18,7 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
-/// Measures [X3Decoder]'s windowed-read overhead in isolation from real file content
+/// Measures [SudStreamingDecoder]'s windowed-read overhead in isolation from real file content
 /// (fixture is an all-zero `.sud`), i.e. the pipeline/dispatch cost rather than codec work.
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
@@ -26,10 +26,10 @@ import java.util.concurrent.TimeUnit;
 @Measurement(iterations = 1, time = 1)
 @Fork(1)
 @State(Scope.Thread)
-public class X3DecoderBenchmark {
+public class SudStreamingDecoderBenchmark {
 
     private Path sudFile;
-    private X3Decoder decoder;
+    private SudStreamingDecoder decoder;
     private short[] intDest;
     private float[] floatDest;
 
@@ -37,7 +37,7 @@ public class X3DecoderBenchmark {
     public void setup() throws Exception {
         sudFile = Files.createTempFile("x3a-bench-", ".sud");
         Files.write(sudFile, new byte[4096]);
-        decoder = new X3Decoder(sudFile);
+        decoder = new SudStreamingDecoder(sudFile);
         intDest = new short[2048];
         floatDest = new float[2048];
     }

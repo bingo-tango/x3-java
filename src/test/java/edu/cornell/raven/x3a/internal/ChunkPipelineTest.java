@@ -1,7 +1,7 @@
 package edu.cornell.raven.x3a.internal;
 
 import edu.cornell.raven.x3a.DecodeOptions;
-import edu.cornell.raven.x3a.X3AudioDecoder;
+import edu.cornell.raven.x3a.X3FrameDecoder;
 import org.junit.jupiter.api.Test;
 
 import java.lang.foreign.Arena;
@@ -19,7 +19,7 @@ class ChunkPipelineTest {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment mapped = arena.allocate(256);
             ChunkPipeline pipeline = new ChunkPipeline(
-                    mapped, new long[0], 0, new X3AudioDecoder(), 1, 4);
+                    mapped, new long[0], 0, new X3FrameDecoder(), 1, 4);
 
             short[] dest = new short[128];
             assertEquals(0, pipeline.decodeWindowInt(0L, dest.length, dest));
@@ -33,7 +33,7 @@ class ChunkPipelineTest {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment mapped = arena.allocate(256);
             ChunkPipeline pipeline = new ChunkPipeline(
-                    mapped, new long[0], 0, new X3AudioDecoder(), 1, 2);
+                    mapped, new long[0], 0, new X3FrameDecoder(), 1, 2);
 
             float[] dest = new float[64];
             short[] scratch = new short[64];
@@ -49,7 +49,7 @@ class ChunkPipelineTest {
                     .withMaxConcurrency(2)
                     .withSharedLimiter(false);
             ChunkPipeline pipeline = new ChunkPipeline(
-                    mapped, new long[0], 0, 0L, new X3AudioDecoder(), 1, opts);
+                    mapped, new long[0], 0, 0L, new X3FrameDecoder(), 1, opts);
             assertFalse(pipeline.usesSharedLimiter());
             assertEquals(2, pipeline.maxConcurrency());
         }
@@ -62,7 +62,7 @@ class ChunkPipelineTest {
             Semaphore custom = new Semaphore(3);
             DecodeOptions opts = DecodeOptions.defaults().withSharedLimiter(custom);
             ChunkPipeline pipeline = new ChunkPipeline(
-                    mapped, new long[0], 0, 0L, new X3AudioDecoder(), 1, opts);
+                    mapped, new long[0], 0, 0L, new X3FrameDecoder(), 1, opts);
             assertTrue(pipeline.usesSharedLimiter());
         }
     }
